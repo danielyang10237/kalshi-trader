@@ -3,3 +3,45 @@
 /nfl/data
 /nfl/modeling/data
 /polymarket/data
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+gui/frontend/node_modules/
+gui/frontend/.pnp
+gui/frontend/.pnp.*
+gui/frontend/.yarn/*
+!gui/frontend/.yarn/patches
+!gui/frontend/.yarn/plugins
+!gui/frontend/.yarn/releases
+!gui/frontend/.yarn/versions
+
+# testing
+gui/frontend/coverage/
+
+# next.js
+gui/frontend/.next/
+gui/frontend/out/
+
+# production
+gui/frontend/build/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files
+.env*.local
+.env
+
+# vercel
+gui/frontend/.vercel/
+
+# typescript
+gui/frontend/*.tsbuildinfo
+gui/frontend/next-env.d.ts
+
