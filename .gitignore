@@ -1,5 +1,6 @@
 /API_testing/
 /kalshi/data
+/nba/data
 /nfl/data
 /nfl/modeling/data
 /polymarket/data
@@ -13,7 +14,7 @@ gui/frontend/.yarn/*
 !gui/frontend/.yarn/patches
 !gui/frontend/.yarn/plugins
 !gui/frontend/.yarn/releases
-!gui/frontend/.yarn/versions
+!gui/frontend/.yarn/versions 
 
 # testing
 gui/frontend/coverage/

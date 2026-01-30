@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import OrderbookLadder from '@/components/OrderbookLadder';
 import CandlestickChart from '@/components/CandlestickChart';
@@ -17,7 +17,9 @@ import {
   fetchOrders,
   RestingOrder,
   cancelMarketOrders,
-  initOrderGroup
+  initOrderGroup,
+  fetchFills,
+  Fill as ApiFill
 } from '@/lib/api';
 import Link from 'next/link';
 
@@ -41,6 +43,15 @@ interface Fill {
   is_taker: boolean;
 }
 
+// Type for individual limit order panels
+interface LimitOrderPanel {
+  id: string;
+  action: 'buy' | 'sell';
+  price: number | null;
+  quantity: number;
+  reduceOnly: boolean;
+}
+
 export default function OrderbookPage() {
   const searchParams = useSearchParams();
   const tickerParam = searchParams.get('ticker');
@@ -58,19 +69,23 @@ export default function OrderbookPage() {
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceError, setBalanceError] = useState<string | null>(null);
   
-  // Order form state - separate quantities for each order type
-  const [limitQuantity, setLimitQuantity] = useState<number>(1);
-  const [limitPrice, setLimitPrice] = useState<number | null>(null);
-  const [limitAction, setLimitAction] = useState<'buy' | 'sell' | null>(null);
-  const [limitReduceOnly, setLimitReduceOnly] = useState<boolean>(false);
+  // Order form state
   const [marketQuantity, setMarketQuantity] = useState<number>(1);
   const [marketReduceOnly, setMarketReduceOnly] = useState<boolean>(false);
   const [orderLoading, setOrderLoading] = useState<string | null>(null);
   const [orderMessage, setOrderMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  
+  // Multiple limit order panels state
+  const [limitPanels, setLimitPanels] = useState<LimitOrderPanel[]>([]);
+  const [draggedPanelId, setDraggedPanelId] = useState<string | null>(null);
 
   // User's resting orders and recent fills
   const [userOrders, setUserOrders] = useState<UserOrder[]>([]);
   const [recentFills, setRecentFills] = useState<Fill[]>([]);
+  
+  // Trade history for position panel
+  const [marketFills, setMarketFills] = useState<ApiFill[]>([]);
+  const [fillsLoading, setFillsLoading] = useState(false);
 
   useEffect(() => {
     if (tickerParam) {
@@ -163,8 +178,26 @@ export default function OrderbookPage() {
     }
   };
 
+  // Fetch fills for the active market (trade history)
+  const refreshMarketFills = async () => {
+    if (!activeMarket) {
+      setMarketFills([]);
+      return;
+    }
+    try {
+      setFillsLoading(true);
+      const fillsData = await fetchFills(activeMarket, 500);
+      setMarketFills(fillsData.fills || []);
+    } catch (err) {
+      console.error('Failed to fetch market fills:', err);
+    } finally {
+      setFillsLoading(false);
+    }
+  };
+
   useEffect(() => {
     refreshUserOrders();
+    refreshMarketFills();
     // Refresh orders every 10 seconds
     const interval = setInterval(refreshUserOrders, 10000);
     return () => clearInterval(interval);
@@ -192,9 +225,10 @@ export default function OrderbookPage() {
           // Add to recent fills (keep max 10)
           setRecentFills(prev => [fill, ...prev].slice(0, 10));
           
-          // Refresh orders and positions after a fill
+          // Refresh orders, positions, and market fills after a fill
           refreshUserOrders();
           refreshBalanceAndPositions();
+          refreshMarketFills();
         }
       } catch (err) {
         console.error('[Fills WS] Error parsing message:', err);
@@ -225,31 +259,85 @@ export default function OrderbookPage() {
   // Order handlers
   const clearMessage = () => setOrderMessage(null);
 
+  // Generate unique ID for panels
+  const generatePanelId = () => `panel-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  // Add a new limit order panel
+  const addLimitPanel = useCallback((action: 'buy' | 'sell', price: number | null = null) => {
+    const newPanel: LimitOrderPanel = {
+      id: generatePanelId(),
+      action,
+      price,
+      quantity: 1,
+      reduceOnly: false,
+    };
+    setLimitPanels(prev => [...prev, newPanel]);
+  }, []);
+
+  // Remove a limit order panel
+  const removeLimitPanel = useCallback((panelId: string) => {
+    setLimitPanels(prev => prev.filter(p => p.id !== panelId));
+  }, []);
+
+  // Update a specific panel's fields
+  const updateLimitPanel = useCallback((panelId: string, updates: Partial<LimitOrderPanel>) => {
+    setLimitPanels(prev => prev.map(p => 
+      p.id === panelId ? { ...p, ...updates } : p
+    ));
+  }, []);
+
   // Callback for when a price level is clicked in the orderbook ladder
   const handleLadderClick = (price: number, side: 'yes' | 'no') => {
-    setLimitPrice(price);
-    // YES side click = BUY, NO side click = SELL
-    setLimitAction(side === 'yes' ? 'buy' : 'sell');
+    // Create a new panel with the clicked price and side
+    const action = side === 'yes' ? 'buy' : 'sell';
+    addLimitPanel(action, price);
+  };
+
+  // Drag and drop handlers
+  const handleDragStart = (panelId: string) => {
+    setDraggedPanelId(panelId);
+  };
+
+  const handleDragOver = (e: React.DragEvent, targetPanelId: string) => {
+    e.preventDefault();
+    if (!draggedPanelId || draggedPanelId === targetPanelId) return;
+    
+    setLimitPanels(prev => {
+      const draggedIdx = prev.findIndex(p => p.id === draggedPanelId);
+      const targetIdx = prev.findIndex(p => p.id === targetPanelId);
+      if (draggedIdx === -1 || targetIdx === -1) return prev;
+      
+      const newPanels = [...prev];
+      const [draggedPanel] = newPanels.splice(draggedIdx, 1);
+      newPanels.splice(targetIdx, 0, draggedPanel);
+      return newPanels;
+    });
+  };
+
+  const handleDragEnd = () => {
+    setDraggedPanelId(null);
   };
   
-  const handleLimitOrderExecute = async () => {
-    if (!activeMarket || !limitAction || limitQuantity < 1 || !limitPrice || limitPrice < 1 || limitPrice > 99) return;
+  // Execute a single limit order panel
+  const handleLimitPanelExecute = async (panel: LimitOrderPanel) => {
+    if (!activeMarket || panel.quantity < 1 || !panel.price || panel.price < 1 || panel.price > 99) return;
     
-    setOrderLoading('limit-execute');
+    setOrderLoading(`limit-${panel.id}`);
     setOrderMessage(null);
     
     try {
-      const request = { ticker: activeMarket, count: limitQuantity, price: limitPrice, reduce_only: limitReduceOnly };
-      const result = limitAction === 'buy' 
+      const request = { ticker: activeMarket, count: panel.quantity, price: panel.price, reduce_only: panel.reduceOnly };
+      const result = panel.action === 'buy' 
         ? await placeBuyLimitOrder(request)
         : await placeSellLimitOrder(request);
       
-      setOrderMessage({ type: 'success', text: `${limitAction.toUpperCase()} limit order placed! Order ID: ${result.order.order_id.slice(0, 8)}...` });
+      setOrderMessage({ type: 'success', text: `${panel.action.toUpperCase()} limit order placed! Order ID: ${result.order.order_id.slice(0, 8)}...` });
       setTimeout(clearMessage, 5000);
       
-      // Refresh balance, positions, and orders after successful order
+      // Refresh balance, positions, orders, and fills after successful order
       refreshBalanceAndPositions();
       refreshUserOrders();
+      refreshMarketFills();
     } catch (err) {
       setOrderMessage({ type: 'error', text: err instanceof Error ? err.message : 'Order failed' });
     } finally {
@@ -272,8 +360,9 @@ export default function OrderbookPage() {
       setOrderMessage({ type: 'success', text: `${action.toUpperCase()} market order filled! Order ID: ${result.order.order_id.slice(0, 8)}...` });
       setTimeout(clearMessage, 5000);
       
-      // Refresh balance and positions after successful order
+      // Refresh balance, positions, and fills after successful order
       refreshBalanceAndPositions();
+      refreshMarketFills();
     } catch (err) {
       setOrderMessage({ type: 'error', text: err instanceof Error ? err.message : 'Order failed' });
     } finally {
@@ -449,47 +538,131 @@ export default function OrderbookPage() {
               )}
             </div>
 
-            {/* Current Position for this Market */}
-            <div className="p-3 border-b border-gray-700">
-              <div className="text-xs text-gray-400 mb-2">Position: {activeMarket}</div>
+            {/* Trade History & Position Panel */}
+            <div className="p-3 border-b border-gray-700 max-h-64 overflow-y-auto">
+              <div className="text-xs text-gray-400 mb-2 flex justify-between items-center">
+                <span>Position: {activeMarket}</span>
+                <button
+                  onClick={refreshMarketFills}
+                  className="text-[10px] text-blue-400 hover:text-blue-300"
+                >
+                  {fillsLoading ? '...' : '↻'}
+                </button>
+              </div>
               {(() => {
-                const currentPosition = positions.find(p => p.ticker === activeMarket);
-                if (currentPosition) {
-                  return (
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-400">Contracts</div>
-                        <div className={`font-mono font-bold ${currentPosition.position >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {currentPosition.position >= 0 ? '+' : ''}{currentPosition.position}
-                        </div>
-                      </div>
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-400">Exposure</div>
-                        <div className="font-mono font-bold text-yellow-400">
-                          ${(currentPosition.market_exposure / 100).toFixed(2)}
-                        </div>
-                      </div>
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-400">Realized P&L</div>
-                        <div className={`font-mono font-bold ${currentPosition.realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          ${(currentPosition.realized_pnl / 100).toFixed(2)}
-                        </div>
-                      </div>
-                      <div className="bg-gray-900 rounded p-2">
-                        <div className="text-gray-400">Resting Orders</div>
-                        <div className="font-mono font-bold text-blue-400">
-                          {currentPosition.resting_orders_count}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                } else {
+                // Calculate position stats from fills
+                let netPosition = 0;
+                let totalSpentCents = 0; // Total absolute spent (all buys + sells)
+                let cashFlowCents = 0;   // Net cash flow (negative = paid out, positive = received)
+                
+                // Group trades by price and action for display
+                const tradesByPriceAction = new Map<string, { action: 'buy' | 'sell', price: number, count: number }>();
+                
+                marketFills.forEach(fill => {
+                  const count = fill.count;
+                  const price = fill.yes_price;
+                  
+                  if (fill.action === 'buy') {
+                    netPosition += count;
+                    totalSpentCents += price * count;
+                    cashFlowCents -= price * count; // Paid out
+                  } else {
+                    netPosition -= count;
+                    totalSpentCents += price * count;
+                    cashFlowCents += price * count; // Received
+                  }
+                  
+                  // Group for display
+                  const key = `${fill.action}-${price}`;
+                  const existing = tradesByPriceAction.get(key);
+                  if (existing) {
+                    existing.count += count;
+                  } else {
+                    tradesByPriceAction.set(key, { action: fill.action, price, count });
+                  }
+                });
+                
+                // If YES wins (settles to 1): each contract is worth 100¢
+                // PnL if YES = cashFlowCents + (netPosition * 100)
+                const gainIfYesCents = cashFlowCents + (netPosition * 100);
+                
+                // If NO wins (settles to 0): contracts worth 0¢
+                // PnL if NO = cashFlowCents + 0
+                const gainIfNoCents = cashFlowCents;
+                
+                // Sort trades for display: buys first, then sells, by price descending
+                const sortedTrades = Array.from(tradesByPriceAction.values())
+                  .sort((a, b) => {
+                    if (a.action !== b.action) return a.action === 'buy' ? -1 : 1;
+                    return b.price - a.price;
+                  });
+                
+                if (marketFills.length === 0 && !fillsLoading) {
                   return (
                     <div className="text-sm text-gray-500 bg-gray-900 rounded p-3 text-center">
-                      No position in this market
+                      No trades in this market
                     </div>
                   );
                 }
+                
+                return (
+                  <div className="space-y-2">
+                    {/* Stats Grid */}
+                    <div className="grid grid-cols-2 gap-1.5 text-xs">
+                      <div className="bg-gray-900 rounded p-1.5">
+                        <div className="text-gray-500 text-[10px]">Net Position</div>
+                        <div className={`font-mono font-bold ${netPosition >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {netPosition >= 0 ? '+' : ''}{netPosition}
+                        </div>
+                      </div>
+                      <div className="bg-gray-900 rounded p-1.5">
+                        <div className="text-gray-500 text-[10px]">Total Spent</div>
+                        <div className="font-mono font-bold text-yellow-400">
+                          {(totalSpentCents / 100).toFixed(2)}¢
+                        </div>
+                      </div>
+                      <div className="bg-gray-900 rounded p-1.5">
+                        <div className="text-gray-500 text-[10px]">If YES (1)</div>
+                        <div className={`font-mono font-bold ${gainIfYesCents >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {gainIfYesCents >= 0 ? '+' : ''}{(gainIfYesCents / 100).toFixed(2)}¢
+                        </div>
+                      </div>
+                      <div className="bg-gray-900 rounded p-1.5">
+                        <div className="text-gray-500 text-[10px]">If NO (0)</div>
+                        <div className={`font-mono font-bold ${gainIfNoCents >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {gainIfNoCents >= 0 ? '+' : ''}{(gainIfNoCents / 100).toFixed(2)}¢
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Individual Trades List */}
+                    {sortedTrades.length > 0 && (
+                      <div className="mt-2">
+                        <div className="text-[10px] text-gray-500 mb-1">Trade History ({marketFills.length} fills)</div>
+                        <div className="space-y-0.5 max-h-24 overflow-y-auto">
+                          {sortedTrades.map((trade, idx) => (
+                            <div 
+                              key={idx}
+                              className={`flex justify-between items-center text-[10px] p-1 rounded ${
+                                trade.action === 'buy' ? 'bg-green-900/20' : 'bg-red-900/20'
+                              }`}
+                            >
+                              <span className={trade.action === 'buy' ? 'text-green-400' : 'text-red-400'}>
+                                {trade.action === 'buy' ? '🟢 BUY' : '🔴 SELL'}
+                              </span>
+                              <span className="font-mono text-gray-300">
+                                {trade.count} @ {trade.price}¢
+                              </span>
+                              <span className="font-mono text-gray-500">
+                                = {((trade.count * trade.price) / 100).toFixed(2)}¢
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
               })()}
             </div>
 
@@ -506,8 +679,9 @@ export default function OrderbookPage() {
                 </div>
               )}
 
-<div className="p-2 bg-gray-900/50 rounded-lg border border-gray-700/50">
-                <div className="text-xs font-medium text-yellow-500/80">Market Orders</div>
+{/* Market Orders Panel */}
+              <div className="p-2 bg-gray-900/50 rounded-lg border border-gray-700/50">
+                <div className="text-xs font-medium text-yellow-500/80 mb-2">Market Orders</div>
 
                 {/* Market Quantity */}
                 <div className="mb-2">
@@ -541,8 +715,8 @@ export default function OrderbookPage() {
                   </button>
                 </div>
                 
-                {/* Market Order Buttons - Smaller */}
-                <div className="grid grid-cols-2 gap-1.5">
+                {/* Market Order Buttons */}
+                <div className="grid grid-cols-2 gap-1.5 mb-2">
                   <button
                     onClick={() => handleMarketOrder('buy')}
                     disabled={orderLoading !== null}
@@ -558,98 +732,129 @@ export default function OrderbookPage() {
                     {orderLoading === 'market-sell' ? '...' : 'Sell Now'}
                   </button>
                 </div>
-              </div>
 
-              <div className="p-3 bg-gray-900/80 rounded-lg border border-gray-600">
-                <div className="text-sm font-semibold text-green-400 mb-3">Limit Orders</div>
-                
-                {/* Selected Price Display */}
-                <div className="mb-3 p-2 bg-gray-800 rounded">
-                  <div className="text-[10px] text-gray-400 mb-1">Price (click ladder to set)</div>
-                  <div className={`text-xl font-mono font-bold text-center ${
-                    limitPrice ? (limitAction === 'buy' ? 'text-green-400' : 'text-red-400') : 'text-gray-500'
-                  }`}>
-                    {limitPrice ? `${limitPrice}¢` : '—'}
+                {/* Add Limit Order Buttons */}
+                <div className="pt-2 border-t border-gray-700/50">
+                  <div className="text-[9px] text-gray-500 mb-1.5 text-center">Add Limit Order</div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={() => addLimitPanel('buy')}
+                      className="py-1.5 bg-green-900/40 hover:bg-green-800/60 rounded text-xs font-medium transition-colors border border-green-600/30 text-green-400"
+                    >
+                      + Buy Limit
+                    </button>
+                    <button
+                      onClick={() => addLimitPanel('sell')}
+                      className="py-1.5 bg-red-900/40 hover:bg-red-800/60 rounded text-xs font-medium transition-colors border border-red-600/30 text-red-400"
+                    >
+                      + Sell Limit
+                    </button>
                   </div>
                 </div>
+              </div>
 
-                {/* Limit Quantity */}
-                <div className="mb-3">
-                  <div className="text-[10px] text-gray-400 mb-1">Quantity</div>
-                  <div className="flex items-center gap-1">
+              {/* Limit Order Panels */}
+              {limitPanels.map((panel) => (
+                <div
+                  key={panel.id}
+                  draggable
+                  onDragStart={() => handleDragStart(panel.id)}
+                  onDragOver={(e) => handleDragOver(e, panel.id)}
+                  onDragEnd={handleDragEnd}
+                  className={`p-2 rounded-lg border transition-all cursor-move ${
+                    panel.action === 'buy' 
+                      ? 'bg-green-900/30 border-green-600/50' 
+                      : 'bg-red-900/30 border-red-600/50'
+                  } ${draggedPanelId === panel.id ? 'opacity-50 scale-95' : ''}`}
+                >
+                  {/* Panel Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-gray-500 cursor-grab">⋮⋮</span>
+                      <span className={`text-xs font-bold ${
+                        panel.action === 'buy' ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {panel.action === 'buy' ? '🟢 BUY LIMIT' : '🔴 SELL LIMIT'}
+                      </span>
+                    </div>
                     <button
-                      onClick={() => setLimitQuantity(Math.max(1, limitQuantity - 1))}
-                      className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-lg font-bold"
-                    >−</button>
+                      onClick={() => removeLimitPanel(panel.id)}
+                      className="w-5 h-5 flex items-center justify-center text-gray-500 hover:text-red-400 hover:bg-red-900/30 rounded transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Price Input */}
+                  <div className="mb-2">
+                    <div className="text-[9px] text-gray-500 mb-0.5">Price (¢)</div>
                     <input
                       type="number"
-                      value={limitQuantity}
-                      onChange={(e) => setLimitQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="flex-1 h-8 bg-gray-800 border border-gray-600 rounded text-center font-mono"
+                      value={panel.price || ''}
+                      onChange={(e) => updateLimitPanel(panel.id, { price: parseInt(e.target.value) || null })}
+                      placeholder="Click ladder"
+                      className="w-full h-7 bg-gray-800 border border-gray-600 rounded text-center font-mono text-sm"
                       min={1}
+                      max={99}
                     />
+                  </div>
+
+                  {/* Quantity Input */}
+                  <div className="mb-2">
+                    <div className="text-[9px] text-gray-500 mb-0.5">Quantity</div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => updateLimitPanel(panel.id, { quantity: Math.max(1, panel.quantity - 1) })}
+                        className="w-6 h-6 bg-gray-700 hover:bg-gray-600 rounded text-sm font-bold"
+                      >−</button>
+                      <input
+                        type="number"
+                        value={panel.quantity}
+                        onChange={(e) => updateLimitPanel(panel.id, { quantity: Math.max(1, parseInt(e.target.value) || 1) })}
+                        className="flex-1 h-6 bg-gray-800 border border-gray-600 rounded text-center font-mono text-xs"
+                        min={1}
+                      />
+                      <button
+                        onClick={() => updateLimitPanel(panel.id, { quantity: panel.quantity + 1 })}
+                        className="w-6 h-6 bg-gray-700 hover:bg-gray-600 rounded text-sm font-bold"
+                      >+</button>
+                    </div>
+                  </div>
+
+                  {/* Reduce Only Toggle */}
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500">Reduce Only</span>
                     <button
-                      onClick={() => setLimitQuantity(limitQuantity + 1)}
-                      className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded text-lg font-bold"
-                    >+</button>
+                      onClick={() => updateLimitPanel(panel.id, { reduceOnly: !panel.reduceOnly })}
+                      className={`w-8 h-4 rounded-full transition-colors relative ${panel.reduceOnly ? 'bg-yellow-600' : 'bg-gray-600'}`}
+                    >
+                      <div className={`w-3 h-3 bg-white rounded-full absolute top-0.5 transition-all ${panel.reduceOnly ? 'left-4' : 'left-0.5'}`} />
+                    </button>
                   </div>
-                </div>
 
-                {/* Limit Reduce Only */}
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="text-[10px] text-gray-400">Reduce Only</span>
+                  {/* Execute Button */}
                   <button
-                    onClick={() => setLimitReduceOnly(!limitReduceOnly)}
-                    className={`w-10 h-5 rounded-full transition-colors relative ${limitReduceOnly ? 'bg-green-600' : 'bg-gray-600'}`}
-                  >
-                    <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${limitReduceOnly ? 'left-5' : 'left-0.5'}`} />
-                  </button>
-                </div>
-
-                {/* BUY / SELL Selection */}
-                <div className="grid grid-cols-2 gap-2 mb-3">
-                  <button
-                    onClick={() => setLimitAction('buy')}
-                    className={`py-2 rounded-lg font-bold text-sm transition-colors ${
-                      limitAction === 'buy' 
-                        ? 'bg-green-600 text-white ring-2 ring-green-400' 
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    onClick={() => handleLimitPanelExecute(panel)}
+                    disabled={orderLoading !== null || !panel.price}
+                    className={`w-full py-1.5 rounded font-bold text-xs transition-colors ${
+                      panel.price
+                        ? panel.action === 'buy'
+                          ? 'bg-green-600 hover:bg-green-500 text-white'
+                          : 'bg-red-600 hover:bg-red-500 text-white'
+                        : 'bg-gray-700 text-gray-500 cursor-not-allowed'
                     }`}
                   >
-                    BUY
+                    {orderLoading === `limit-${panel.id}` ? '...' : `EXECUTE ${panel.action.toUpperCase()}`}
                   </button>
-                  <button
-                    onClick={() => setLimitAction('sell')}
-                    className={`py-2 rounded-lg font-bold text-sm transition-colors ${
-                      limitAction === 'sell' 
-                        ? 'bg-red-600 text-white ring-2 ring-red-400' 
-                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                    }`}
-                  >
-                    SELL
-                  </button>
-                </div>
 
-                {/* EXECUTE Button */}
-                <button
-                  onClick={handleLimitOrderExecute}
-                  disabled={orderLoading !== null || !limitPrice || !limitAction}
-                  className={`w-full py-3 rounded-lg font-bold text-sm transition-colors ${
-                    limitPrice && limitAction
-                      ? 'bg-blue-600 hover:bg-blue-500 text-white'
-                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  {orderLoading === 'limit-execute' ? '...' : 'EXECUTE'}
-                </button>
-                
-                {/* Order Summary */}
-                {limitPrice && limitAction && (
-                  <div className="mt-2 text-[10px] text-gray-400 text-center">
-                    {limitAction.toUpperCase()} {limitQuantity} @ {limitPrice}¢
-                  </div>
-                )}
-              </div>
+                  {/* Order Summary */}
+                  {panel.price && (
+                    <div className="mt-1 text-[9px] text-gray-500 text-center">
+                      {panel.action.toUpperCase()} {panel.quantity} @ {panel.price}¢
+                    </div>
+                  )}
+                </div>
+              ))}
 
               {/* Recent Fills */}
               <div className="p-3 bg-gray-900/80 rounded-lg border border-purple-600/50">

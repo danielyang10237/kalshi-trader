@@ -367,10 +367,13 @@ export default function OrderbookLadder({ marketTicker, wsUrl = 'ws://localhost:
                       {isBestYesBid && <span className="ml-1 text-[10px] text-blue-400">▼</span>}
                     </td>
 
-                    {/* User Buy Orders */}
-                    <td className={`p-1 text-center ${
-                      hasUserBuys ? 'text-cyan-400 font-bold bg-cyan-900/20' : 'text-gray-700'
-                    }`}>
+                    {/* User Buy Orders - clickable */}
+                    <td 
+                      className={`p-1 text-center ${
+                        hasUserBuys ? 'text-cyan-400 font-bold bg-cyan-900/20' : 'text-gray-700'
+                      } ${onPriceClick ? 'hover:bg-cyan-900/30 cursor-pointer' : ''}`}
+                      onClick={() => onPriceClick?.(price, 'yes')}
+                    >
                       {hasUserBuys ? userBuys.toLocaleString() : ''}
                     </td>
                     
@@ -383,10 +386,13 @@ export default function OrderbookLadder({ marketTicker, wsUrl = 'ws://localhost:
                       {price}
                     </td>
 
-                    {/* User Sell Orders */}
-                    <td className={`p-1 text-center ${
-                      hasUserSells ? 'text-orange-400 font-bold bg-orange-900/20' : 'text-gray-700'
-                    }`}>
+                    {/* User Sell Orders - clickable */}
+                    <td 
+                      className={`p-1 text-center ${
+                        hasUserSells ? 'text-orange-400 font-bold bg-orange-900/20' : 'text-gray-700'
+                      } ${onPriceClick ? 'hover:bg-orange-900/30 cursor-pointer' : ''}`}
+                      onClick={() => onPriceClick?.(price, 'no')}
+                    >
                       {hasUserSells ? userSells.toLocaleString() : ''}
                     </td>
                     

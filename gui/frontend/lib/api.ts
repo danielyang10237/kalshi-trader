@@ -356,3 +356,36 @@ export async function placeSellMarketOrder(req: MarketOrderRequest): Promise<Ord
   }
   return response.json();
 }
+
+// =============================================================================
+// Trading - Fills
+// =============================================================================
+
+export interface Fill {
+  trade_id: string;
+  order_id: string;
+  ticker: string;
+  side: 'yes' | 'no';
+  action: 'buy' | 'sell';
+  count: number;
+  yes_price: number;
+  no_price: number;
+  is_taker: boolean;
+  created_time: string;
+}
+
+export interface FillsResponse {
+  fills: Fill[];
+  cursor?: string;
+}
+
+export async function fetchFills(ticker?: string, limit: number = 100): Promise<FillsResponse> {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (ticker) params.append('ticker', ticker);
+  
+  const response = await fetch(`${API_URL}/api/trading/fills?${params}`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fills: ${response.statusText}`);
+  }
+  return response.json();
+}
