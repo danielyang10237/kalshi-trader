@@ -9,9 +9,10 @@ import requests
 # Create output directory if it doesn't exist
 os.makedirs("nba/data/schedules", exist_ok=True)
 
-for year in range(2002, 1999, -1):
+for year in range(2026, 1999, -1):
 
-    season = f"{year}-{year+1-2000}"
+    # Format: YYYY-YY with zero-padded YY (e.g., "2008-09", not "2008-9")
+    season = f"{year}-{str(year+1-2000).zfill(2)}"
 
     output_file = f"nba/data/schedules/schedule_{season}.csv"
 

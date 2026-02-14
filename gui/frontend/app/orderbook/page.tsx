@@ -168,7 +168,8 @@ export default function OrderbookPage() {
     try {
       const ordersData = await fetchOrders(activeMarket);
       const orders: UserOrder[] = (ordersData.orders || []).map((o: RestingOrder) => ({
-        price: o.yes_price,
+        // Kalshi may return yes_price=0 for sell orders, with the actual price in no_price
+        price: o.yes_price > 0 ? o.yes_price : (100 - o.no_price),
         size: o.remaining_count,
         action: o.action as 'buy' | 'sell',
       }));

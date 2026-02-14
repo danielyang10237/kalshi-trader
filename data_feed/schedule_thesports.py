@@ -7,8 +7,9 @@ import json
 import requests
 from dotenv import load_dotenv
 
+COMPETITION_ID = "49vjxm8xt4q6odg"
 
-BASE_URL = "https://api.thesports.com/v1/american_football/match/diary"
+BASE_URL = "https://api.thesports.com/v1/basketball/match/diary"
 
 
 def fetch_schedule(
@@ -58,7 +59,17 @@ def main() -> None:
 
     data = fetch_schedule(user, secret, tsp)
 
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    # Filter results by COMPETITION_ID
+    if "results" in data:
+        original_count = len(data["results"])
+        filtered_results = [
+            match for match in data["results"]
+            if match.get("competition_id") == COMPETITION_ID
+        ]
+        data["results"] = filtered_results
+        print(f"Filtered {original_count} matches to {len(filtered_results)} matching competition_id={COMPETITION_ID}")
+
+    print(json.dumps(data['results'], indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

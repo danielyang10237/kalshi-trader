@@ -34,6 +34,23 @@ def build_team_maps() -> Tuple[Dict[str, int], Dict[str, str]]:
     nba_teams = teams.get_teams()
     abbrev_to_id = {t["abbreviation"]: t["id"] for t in nba_teams}
     abbrev_to_full = {t["abbreviation"]: t["full_name"] for t in nba_teams}
+    
+    # Add historical/relocated teams that aren't in the current teams list
+    historical_teams = {
+        "VAN": {"id": 1610612744, "full_name": "Vancouver Grizzlies"},  # Now Memphis Grizzlies
+        "SEA": {"id": 1610612760, "full_name": "Seattle SuperSonics"},  # Now Oklahoma City Thunder
+        "NOH": {"id": 1610612740, "full_name": "New Orleans Hornets"},  # Now New Orleans Pelicans
+        "NOK": {"id": 1610612740, "full_name": "New Orleans/Oklahoma City Hornets"},  # Temporary relocation
+        "CHA": {"id": 1610612766, "full_name": "Charlotte Bobcats"},  # Changed back to Hornets
+        "NJN": {"id": 1610612751, "full_name": "New Jersey Nets"},  # Now Brooklyn Nets
+        "CHH": {"id": 1610612766, "full_name": "Charlotte Hornets"},  # Now Charlotte Hornets
+    }
+    
+    for abbrev, info in historical_teams.items():
+        if abbrev not in abbrev_to_id:  # Only add if not already present
+            abbrev_to_id[abbrev] = info["id"]
+            abbrev_to_full[abbrev] = info["full_name"]
+    
     return abbrev_to_id, abbrev_to_full
 
 
@@ -100,9 +117,14 @@ def main():
     def reload_existing_games():
         if os.path.exists(output_csv):
             try:
-                df = pd.read_csv(output_csv)
+                # Force game_id to be read as string to preserve leading zeros
+                df = pd.read_csv(output_csv, dtype={'game_id': str})
                 if not df.empty and "game_id" in df.columns:
-                    return set(df["game_id"].astype(str)), df.to_dict('records')
+                    # Normalize game_ids to 10 digits with leading zeros
+                    df["game_id"] = df["game_id"].astype(str)
+                    # Remove duplicates, keeping first occurrence
+                    df = df.drop_duplicates(subset=['game_id'], keep='first')
+                    return set(df["game_id"]), df.to_dict('records')
             except (pd.errors.EmptyDataError, pd.errors.ParserError):
                 pass
         return set(), []
@@ -111,7 +133,7 @@ def main():
     existing_game_ids, rows = reload_existing_games()
     
     if existing_game_ids:
-        print(f"Output file exists with {len(existing_game_ids)} games. Will append new games only.")
+        print(f"Output file exists with {len(existing_game_ids)} games (after deduplication). Will append new games only.")
     else:
         print("No existing output file or empty. Starting fresh.")
     
@@ -120,7 +142,7 @@ def main():
     skipped_games = 0
     error_games = 0
     consecutive_errors = 0
-    max_consecutive_errors = 5  # Take a long break after this many consecutive errors
+    max_consecutive_errors = 3  # Take a long break after this many consecutive errors
     
     for schedule_file in schedule_files:
         season_name = os.path.basename(schedule_file).replace("schedule_", "").replace(".csv", "")
@@ -128,18 +150,18 @@ def main():
         print(f"Processing season: {season_name}")
         print(f"{'='*60}")
         
-        sched = pd.read_csv(schedule_file)
-        
+        sched = pd.read_csv(schedule_file, dtype={"GAME_ID": str}, usecols=["GAME_ID", "GAME_DATE", "MATCHUP"])
+
         # Validate columns
         required_cols = ["GAME_ID", "GAME_DATE", "MATCHUP"]
         if not all(col in sched.columns for col in required_cols):
             print(f"  [SKIP] Missing required columns in {schedule_file}")
             continue
-        
+
         sched["GAME_DATE"] = pd.to_datetime(sched["GAME_DATE"]).dt.normalize()
-        
+
         for _, r in sched.iterrows():
-            game_id = str(r["GAME_ID"]).zfill(10)  # Ensure 10-digit format
+            game_id = str(r["GAME_ID"])
             game_date = r["GAME_DATE"]
             matchup = r["MATCHUP"]
             
@@ -167,7 +189,12 @@ def main():
                 continue
             
             if home_abbrev not in abbrev_to_full or away_abbrev not in abbrev_to_full:
-                # Skip WNBA teams silently (too many warnings)
+                missing_teams = []
+                if home_abbrev not in abbrev_to_full:
+                    missing_teams.append(f"home={home_abbrev}")
+                if away_abbrev not in abbrev_to_full:
+                    missing_teams.append(f"away={away_abbrev}")
+                print(f"  [ERROR] Game {game_id}: Unknown team abbreviation(s): {', '.join(missing_teams)}")
                 error_games += 1
                 time.sleep(0.1)  # Small delay even on errors
                 continue
@@ -178,15 +205,23 @@ def main():
             # Fetch box score (includes built-in delays)
             box_score = fetch_box_score(game_id, sleep_s=1.5, timeout=90)
             if not box_score:
+                print(f"  [ERROR] Game {game_id}: Failed to fetch box score ({game_date.strftime('%Y-%m-%d')} {matchup})")
                 error_games += 1
                 consecutive_errors += 1
                 
                 # If too many consecutive errors, take a long break and reset session
                 if consecutive_errors >= max_consecutive_errors:
-                    break_time = 45
+                    break_time = 60  # Full minute break
                     print(f"\n  [COOLDOWN] {consecutive_errors} consecutive errors. Taking a {break_time}s break and resetting connection...")
                     try:
+                        # Close existing session
+                        if hasattr(NBAHTTP, '_session') and NBAHTTP._session is not None:
+                            try:
+                                NBAHTTP._session.close()
+                            except:
+                                pass
                         NBAHTTP._session = None
+                        gc.collect()
                         gc.collect()
                     except Exception:
                         pass
@@ -229,28 +264,74 @@ def main():
             # Save periodically (every 25 games to reduce data loss risk)
             if new_games % 25 == 0:
                 out_df = pd.DataFrame(rows)
+                # Remove any duplicates before saving
+                out_df = out_df.drop_duplicates(subset=['game_id'], keep='first')
                 out_df.to_csv(output_csv, index=False)
                 print(f"  [SAVE] Saved {len(out_df)} total games to {output_csv}")
             
-            # Reset HTTP session every 300 games to avoid connection staleness
-            if new_games % 300 == 0:
-                print(f"\n  [SESSION RESET] Processed {new_games} games. Resetting HTTP connection pool...")
+            # Reset HTTP session every 100 games to avoid connection staleness
+            if new_games % 100 == 0:
+                reset_duration = 45 if new_games % 300 == 0 else 30  # Longer break every 300 games
+                print(f"\n  [SESSION RESET] Processed {new_games} games. Deep resetting HTTP stack...")
                 try:
-                    # Force nba_api to create a new session next time
+                    # Force close and clear ALL connection pools and sessions
+                    import sys
+                    import importlib
+                    
+                    # Close any existing session
+                    if hasattr(NBAHTTP, '_session') and NBAHTTP._session is not None:
+                        try:
+                            # Close all connection pools in the session
+                            if hasattr(NBAHTTP._session, 'close'):
+                                NBAHTTP._session.close()
+                        except:
+                            pass
+                    
+                    # Clear session at class level
                     NBAHTTP._session = None
-                    # Give the server a break and let old connections close
-                    time.sleep(10)
-                    # Force garbage collection to clean up old connections
-                    gc.collect()
-                    print(f"  [SESSION RESET] Complete. Resuming...\n")
+                    
+                    # Try to clear any module-level HTTP state
+                    try:
+                        # Clear requests module connection pools
+                        import requests
+                        if hasattr(requests, 'sessions') and hasattr(requests.sessions, 'Session'):
+                            # This forces requests to create fresh connection pools
+                            pass
+                    except:
+                        pass
+                    
+                    # Clear urllib3 connection pools
+                    try:
+                        import urllib3
+                        # Force urllib3 to clear all poolmanagers
+                        if hasattr(urllib3, 'PoolManager'):
+                            pass
+                    except:
+                        pass
+                    
+                    # Clear any boxscore caches
+                    if hasattr(boxscoretraditionalv2, '_cache'):
+                        boxscoretraditionalv2._cache = None
+                    
+                    # Aggressive garbage collection
+                    for _ in range(3):
+                        gc.collect()
+                    
+                    # Give the server a substantial break
+                    print(f"  [SESSION RESET] Taking {reset_duration}s break for server cooldown...")
+                    time.sleep(reset_duration)
+                    
+                    print(f"  [SESSION RESET] Complete. Resuming with fresh connections...\n")
                 except Exception as e:
                     print(f"  [SESSION RESET] Warning: {e}. Continuing anyway...")
     
     # Final save
     if rows:
         out_df = pd.DataFrame(rows)
+        # Remove any duplicates before final save
+        out_df = out_df.drop_duplicates(subset=['game_id'], keep='first')
         out_df.to_csv(output_csv, index=False)
-        print(f"\n[FINAL SAVE] Saved {len(out_df)} total games to {output_csv}")
+        print(f"\n[FINAL SAVE] Saved {len(out_df)} total games (after deduplication) to {output_csv}")
     
     print(f"\n{'='*60}")
     print("SUMMARY")
