@@ -1,5 +1,96 @@
+# =============================================================================
+# Data — do not track
+# =============================================================================
+/kalshi/data/
+/nba/data/
+/nba/outputs/
+/nfl/data/
+/nfl/modeling/data/
+/polymarket/data/
+
+# =============================================================================
+# Models — saved artifacts (joblib, pickle, xgboost, etc.)
+# =============================================================================
+/nba/models/
+**/models/*.pkl
+**/models/*.pickle
+**/models/*.joblib
+**/models/*.json
+**/outputs/
+*.pkl
+*.pickle
+*.joblib
+
+# =============================================================================
+# Dependencies & node
+# =============================================================================
+node_modules/
+**/node_modules/
+gui/frontend/.pnp
+gui/frontend/.pnp.*
+gui/frontend/.yarn/*
+!gui/frontend/.yarn/patches
+!gui/frontend/.yarn/plugins
+!gui/frontend/.yarn/releases
+!gui/frontend/.yarn/versions
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+.env/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# =============================================================================
+# Jupyter / notebooks
+# =============================================================================
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# =============================================================================
+# Frontend (Next.js, etc.)
+# =============================================================================
+gui/frontend/coverage/
+gui/frontend/.next/
+gui/frontend/out/
+gui/frontend/build/
+gui/frontend/.vercel/
+gui/frontend/*.tsbuildinfo
+gui/frontend/next-env.d.ts
+
+# =============================================================================
+# Env & secrets
+# =============================================================================
+.env
+.env.*
+.env*.local
+*.pem
+
+# =============================================================================
+# OS & misc
+# =============================================================================
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =============================================================================
+# Other
+# =============================================================================
 /API_testing/
-/kalshi/data
-/nfl/data
-/nfl/modeling/data
-/polymarket/data
+
+
+/bet365-re-js/
