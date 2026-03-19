@@ -45,6 +45,7 @@ trading-system/Kalshi-Client-Web/.next/
 trading-system/Kalshi-Client-Web/out/
 trading-system/Kalshi-Client-Web/next-env.d.ts
 trading-system/Kalshi-Client-Web/*.tsbuildinfo
+trading-system/python_app/nba/posterior_modeling/
 
 # =============================================================================
 # Dependencies & node
