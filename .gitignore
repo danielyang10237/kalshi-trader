@@ -8,6 +8,8 @@
 /nfl/modeling/data/
 /polymarket/data/
 
+/nba/prior_models/
+/nba/posterior_models/
 # =============================================================================
 # Models — saved artifacts (joblib, pickle, xgboost, etc.)
 # =============================================================================
@@ -22,17 +24,41 @@
 *.joblib
 
 # =============================================================================
+# Kalshi-Client (Xcode / Swift)
+# =============================================================================
+Kalshi-Client/Kalshi-Client.xcodeproj/xcuserdata/
+Kalshi-Client/Kalshi-Client.xcodeproj/project.xcworkspace/xcuserdata/
+Kalshi-Client/DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+
+# =============================================================================
+# trading-system
+# =============================================================================
+trading-system/data_cache/
+trading-system/.claude/
+trading-system/frontend/.next/
+trading-system/frontend/out/
+trading-system/frontend/next-env.d.ts
+trading-system/frontend/*.tsbuildinfo
+trading-system/Kalshi-Client-Web/.next/
+trading-system/Kalshi-Client-Web/out/
+trading-system/Kalshi-Client-Web/next-env.d.ts
+trading-system/Kalshi-Client-Web/*.tsbuildinfo
+trading-system/python_app/nba/posterior_modeling/
+
+# =============================================================================
 # Dependencies & node
 # =============================================================================
 node_modules/
 **/node_modules/
-gui/frontend/.pnp
-gui/frontend/.pnp.*
-gui/frontend/.yarn/*
-!gui/frontend/.yarn/patches
-!gui/frontend/.yarn/plugins
-!gui/frontend/.yarn/releases
-!gui/frontend/.yarn/versions
+trading-system/frontend/.pnp
+trading-system/frontend/.pnp.*
+trading-system/frontend/.yarn/*
+!trading-system/frontend/.yarn/patches
+!trading-system/frontend/.yarn/plugins
+!trading-system/frontend/.yarn/releases
+!trading-system/frontend/.yarn/versions
 
 # =============================================================================
 # Python
