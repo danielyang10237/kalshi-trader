@@ -1,0 +1,311 @@
+{
+  "game_id": "KXNBAGAME-26MAR09PHICLE",
+  "home_team": null,
+  "away_team": null,
+  "home_score": 0,
+  "away_score": 0,
+  "possession": null,
+  "quarter": 1,
+  "events": [],
+  "espn_game_id": "401810786",
+  "roster": {
+    "home": [
+      {
+        "id": "3934723",
+        "name": "Thomas Bryant",
+        "position": "C",
+        "jersey": "3"
+      },
+      {
+        "id": "4702177",
+        "name": "Keon Ellis",
+        "position": "G",
+        "jersey": "14"
+      },
+      {
+        "id": "4431734",
+        "name": "Tristan Enaruna",
+        "position": "F",
+        "jersey": "21"
+      },
+      {
+        "id": "3992",
+        "name": "James Harden",
+        "position": "G",
+        "jersey": "1"
+      },
+      {
+        "id": "4066757",
+        "name": "Sam Merrill",
+        "position": "G",
+        "jersey": "5"
+      },
+      {
+        "id": "5177362",
+        "name": "Riley Minix",
+        "position": "F",
+        "jersey": "12"
+      },
+      {
+        "id": "3908809",
+        "name": "Donovan Mitchell",
+        "position": "G",
+        "jersey": "45"
+      },
+      {
+        "id": "4432158",
+        "name": "Evan Mobley",
+        "position": "C",
+        "jersey": "4"
+      },
+      {
+        "id": "2580365",
+        "name": "Larry Nance Jr.",
+        "position": "F",
+        "jersey": "22"
+      },
+      {
+        "id": "4701233",
+        "name": "Craig Porter Jr.",
+        "position": "G",
+        "jersey": "9"
+      },
+      {
+        "id": "4278046",
+        "name": "Olivier Sarr",
+        "position": "F",
+        "jersey": "33"
+      },
+      {
+        "id": "3032979",
+        "name": "Dennis Schroder",
+        "position": "G",
+        "jersey": "8"
+      },
+      {
+        "id": "5106268",
+        "name": "Nae'Qwan Tomlin",
+        "position": "F",
+        "jersey": "35"
+      },
+      {
+        "id": "4683747",
+        "name": "Jaylon Tyson",
+        "position": "G",
+        "jersey": "20"
+      },
+      {
+        "id": "3912848",
+        "name": "Dean Wade",
+        "position": "F",
+        "jersey": "32"
+      }
+    ],
+    "away": [
+      {
+        "id": "4870562",
+        "name": "Dominick Barlow",
+        "position": "F",
+        "jersey": "25"
+      },
+      {
+        "id": "4432179",
+        "name": "MarJon Beauchamp",
+        "position": "F",
+        "jersey": "16"
+      },
+      {
+        "id": "5105637",
+        "name": "Adem Bona",
+        "position": "C",
+        "jersey": "30"
+      },
+      {
+        "id": "6585",
+        "name": "Andre Drummond",
+        "position": "C",
+        "jersey": "1"
+      },
+      {
+        "id": "4711297",
+        "name": "Justin Edwards",
+        "position": "F",
+        "jersey": "11"
+      },
+      {
+        "id": "4397014",
+        "name": "Quentin Grimes",
+        "position": "G",
+        "jersey": "5"
+      },
+      {
+        "id": "3012",
+        "name": "Kyle Lowry",
+        "position": "G",
+        "jersey": "7"
+      },
+      {
+        "id": "4397179",
+        "name": "Tyrese Martin",
+        "position": "G",
+        "jersey": "23"
+      },
+      {
+        "id": "3133603",
+        "name": "Kelly Oubre Jr.",
+        "position": "G",
+        "jersey": "9"
+      },
+      {
+        "id": "3064230",
+        "name": "Cameron Payne",
+        "position": "PG",
+        "jersey": "20"
+      },
+      {
+        "id": "4433159",
+        "name": "Dalen Terry",
+        "position": "F",
+        "jersey": "14"
+      },
+      {
+        "id": "4432446",
+        "name": "Jabari Walker",
+        "position": "F",
+        "jersey": "33"
+      },
+      {
+        "id": "4431675",
+        "name": "Trendon Watford",
+        "position": "F",
+        "jersey": "12"
+      }
+    ],
+    "injuries": {
+      "home": [
+        {
+          "name": "Dean Wade",
+          "position": "F",
+          "jersey": "32",
+          "status": "Day-To-Day",
+          "injury": "Ankle",
+          "return_date": "2026-03-09"
+        },
+        {
+          "name": "Jarrett Allen",
+          "position": "C",
+          "jersey": "31",
+          "status": "Out",
+          "injury": "Knee - Tendinitis",
+          "return_date": "2026-03-11"
+        },
+        {
+          "name": "Tyrese Proctor",
+          "position": "G",
+          "jersey": "24",
+          "status": "Out",
+          "injury": "Quadriceps - Strain",
+          "return_date": "2026-03-11"
+        },
+        {
+          "name": "Max Strus",
+          "position": "G",
+          "jersey": "2",
+          "status": "Out",
+          "injury": "Foot - Surgery",
+          "return_date": "2026-03-11"
+        }
+      ],
+      "away": [
+        {
+          "name": "VJ Edgecombe",
+          "position": "G",
+          "jersey": "77",
+          "status": "Out",
+          "injury": "Back - Bruise",
+          "return_date": "2026-03-10"
+        },
+        {
+          "name": "Tyrese Maxey",
+          "position": "G",
+          "jersey": "0",
+          "status": "Out",
+          "injury": "Finger - Sprain",
+          "return_date": "2026-03-12"
+        },
+        {
+          "name": "Joel Embiid",
+          "position": "C",
+          "jersey": "21",
+          "status": "Out",
+          "injury": "Oblique - Strain",
+          "return_date": "2026-03-14"
+        },
+        {
+          "name": "Johni Broome",
+          "position": "F",
+          "jersey": "22",
+          "status": "Out",
+          "injury": "Knee - Surgery",
+          "return_date": "2026-04-01"
+        },
+        {
+          "name": "Paul George",
+          "position": "F",
+          "jersey": "8",
+          "status": "Suspension",
+          "injury": "Suspension - Not Specified",
+          "return_date": "2026-03-25"
+        }
+      ]
+    },
+    "leaders": {
+      "home": [
+        {
+          "name": "Donovan Mitchell",
+          "position": "G",
+          "jersey": "45",
+          "stat": "28.6",
+          "stat_name": "Points",
+          "status": ""
+        },
+        {
+          "name": "Evan Mobley",
+          "position": "C",
+          "jersey": "4",
+          "stat": "8.7",
+          "stat_name": "Rebounds",
+          "status": ""
+        }
+      ],
+      "away": [
+        {
+          "name": "Tyrese Maxey",
+          "position": "G",
+          "jersey": "0",
+          "stat": "29.0",
+          "stat_name": "Points",
+          "status": "Out"
+        },
+        {
+          "name": "Andre Drummond",
+          "position": "C",
+          "jersey": "1",
+          "stat": "8.5",
+          "stat_name": "Rebounds",
+          "status": ""
+        }
+      ]
+    },
+    "predictor": {
+      "home_win_pct": "75.4",
+      "away_win_pct": "24.6"
+    },
+    "odds": {
+      "spread": -13.5,
+      "over_under": 227.5,
+      "home_ml": -850,
+      "away_ml": 575
+    }
+  }
+}

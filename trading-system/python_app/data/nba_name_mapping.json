@@ -1,0 +1,54 @@
+{
+    "SEA": "OKC",
+    "OKC": "OKC",
+  
+    "VAN": "MEM",
+    "MEM": "MEM",
+  
+    "NJN": "BKN",
+    "NJ": "BKN",
+    "BRK": "BKN",
+    "BK": "BKN",
+    "BKN": "BKN",
+  
+    "NOH": "NOP",
+    "NOK": "NOP",
+    "NO": "NOP",
+    "NOP": "NOP",
+  
+    "CHH": "CHA",
+    "CHO": "CHA",
+    "CHA": "CHA",
+  
+    "WSB": "WAS",
+    "WSH": "WAS",
+    "BAL": "WAS",
+    "WAS": "WAS",
+  
+    "PHO": "PHX",
+    "PHX": "PHX",
+  
+    "GS": "GSW",
+    "GSW": "GSW",
+  
+    "SA": "SAS",
+    "SAS": "SAS",
+  
+    "NY": "NYK",
+    "NYK": "NYK",
+  
+    "UTAH": "UTA",
+    "UTA": "UTA",
+  
+    "ATL": "ATL",
+    "BOS": "BOS",
+    "CHI": "CHI",
+    "CLE": "CLE",
+    "DAL": "DAL",
+    "DEN": "DEN",
+    "DET": "DET",
+    "HOU": "HOU",
+    "IND": "IND",
+    "LAC": "LAC",
+    "LAL": "LAL"
+  }

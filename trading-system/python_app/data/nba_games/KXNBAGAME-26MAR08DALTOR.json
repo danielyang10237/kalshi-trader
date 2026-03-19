@@ -1,0 +1,171 @@
+{
+  "game_id": "KXNBAGAME-26MAR08DALTOR",
+  "home_team": "TOR",
+  "away_team": "DAL",
+  "home_score": 13,
+  "away_score": 37,
+  "possession": null,
+  "quarter": 1,
+  "events": [
+    {
+      "action": "score",
+      "team": "home",
+      "points": 2,
+      "ts": 1773009386.6489768,
+      "home_score": 2,
+      "away_score": 0
+    },
+    {
+      "action": "score",
+      "team": "home",
+      "points": 3,
+      "ts": 1773009391.8431418,
+      "home_score": 5,
+      "away_score": 0
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009394.8314419,
+      "home_score": 5,
+      "away_score": 3
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009395.164062,
+      "home_score": 5,
+      "away_score": 6
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009395.69569,
+      "home_score": 5,
+      "away_score": 8
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009396.043721,
+      "home_score": 5,
+      "away_score": 10
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009396.29491,
+      "home_score": 5,
+      "away_score": 13
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009397.5281081,
+      "home_score": 5,
+      "away_score": 15
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009397.528608,
+      "home_score": 5,
+      "away_score": 18
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009397.691939,
+      "home_score": 5,
+      "away_score": 20
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009398.227932,
+      "home_score": 5,
+      "away_score": 23
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009398.542615,
+      "home_score": 5,
+      "away_score": 25
+    },
+    {
+      "action": "score",
+      "team": "home",
+      "points": 3,
+      "ts": 1773009399.032213,
+      "home_score": 8,
+      "away_score": 25
+    },
+    {
+      "action": "score",
+      "team": "home",
+      "points": 2,
+      "ts": 1773009399.2816892,
+      "home_score": 10,
+      "away_score": 25
+    },
+    {
+      "action": "score",
+      "team": "home",
+      "points": 3,
+      "ts": 1773009549.1290581,
+      "home_score": 13,
+      "away_score": 25
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009551.3197708,
+      "home_score": 13,
+      "away_score": 28
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009552.774873,
+      "home_score": 13,
+      "away_score": 30
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009553.22787,
+      "home_score": 13,
+      "away_score": 32
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 2,
+      "ts": 1773009554.468697,
+      "home_score": 13,
+      "away_score": 34
+    },
+    {
+      "action": "score",
+      "team": "away",
+      "points": 3,
+      "ts": 1773009555.1920671,
+      "home_score": 13,
+      "away_score": 37
+    }
+  ]
+}
