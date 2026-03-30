@@ -57,6 +57,10 @@ export interface SeriesTickersResponse {
   series_tickers: string[];
 }
 
+export interface TradingEventsResponse {
+  trading_events: Record<string, string[]>;
+}
+
 export async function fetchSeries(limit: number = 100, cursor?: string, tags?: string[]): Promise<SeriesResponse> {
   const params = new URLSearchParams({ limit: limit.toString() });
   if (cursor) params.append('cursor', cursor);
@@ -99,6 +103,14 @@ export async function fetchConfiguredSeriesTickers(): Promise<SeriesTickersRespo
   const response = await fetch(`${API_URL}/api/config/series-tickers`);
   if (!response.ok) {
     throw new Error(`Failed to fetch configured series tickers: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function fetchTradingEvents(): Promise<TradingEventsResponse> {
+  const response = await fetch(`${API_URL}/api/config/trading-events`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch trading events: ${response.statusText}`);
   }
   return response.json();
 }
@@ -405,6 +417,15 @@ export async function clearCachedFills(): Promise<{ success: boolean }> {
   const response = await fetch(`${API_URL}/api/trading/fills/cached`, { method: 'DELETE' });
   if (!response.ok) {
     throw new Error(`Failed to clear cached fills: ${response.statusText}`);
+  }
+  return response.json();
+}
+
+export async function deployNbaModels(): Promise<{ success: boolean; copied: string[]; errors: string[] }> {
+  const response = await fetch(`${API_URL}/api/config/nba/deploy-models`, { method: 'POST' });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to deploy NBA models: ${error}`);
   }
   return response.json();
 }

@@ -46,6 +46,16 @@ trading-system/Kalshi-Client-Web/out/
 trading-system/Kalshi-Client-Web/next-env.d.ts
 trading-system/Kalshi-Client-Web/*.tsbuildinfo
 trading-system/python_app/nba/posterior_modeling/
+trading-system/python_app/data/nba_roster/
+trading-system/python_app/data/nba_games/
+trading-system/python_app/data/fills.json
+
+# =============================================================================
+# sim-exchange
+# =============================================================================
+sim-exchange/frontend/.next/
+sim-exchange/frontend/next-env.d.ts
+sim-exchange/frontend/*.tsbuildinfo
 
 # =============================================================================
 # Dependencies & node

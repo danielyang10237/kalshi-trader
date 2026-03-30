@@ -248,7 +248,10 @@ export default function CandlestickChart({
         if (data.type === 'trade' && data.msg) {
           const msg = data.msg;
           if (msg.market_ticker === marketTicker) {
-            processTrade(msg.yes_price, msg.ts, msg.count);
+            const yesPrice = msg.yes_price ?? Math.round(parseFloat(msg.yes_price_dollars || '0') * 100);
+            const count = msg.count ?? parseFloat(msg.count_fp || '0');
+            const ts = msg.ts ?? Date.now() / 1000;
+            processTrade(yesPrice, ts, count);
           }
         }
       } catch (err) {

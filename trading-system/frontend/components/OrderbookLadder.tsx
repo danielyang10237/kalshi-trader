@@ -47,17 +47,19 @@ export default function OrderbookLadder({ marketTicker, wsUrl = 'ws://localhost:
   const seqRef = useRef<number>(0);
 
   const processSnapshot = useCallback((msg: any) => {
-    const yesLevels: OrderbookLevel[] = (msg.yes || []).map((level: [number, number]) => ({
-      price: level[0],
-      priceDollars: level[0].toString(),
-      size: level[1]
-    }));
+    // Support both old format (yes/no with [int, int]) and new format (yes_dollars_fp/no_dollars_fp with [string, string])
+    const rawYes = msg.yes_dollars_fp || msg.yes || [];
+    const rawNo = msg.no_dollars_fp || msg.no || [];
 
-    const noLevels: OrderbookLevel[] = (msg.no || []).map((level: [number, number]) => ({
-      price: level[0],
-      priceDollars: level[0].toString(),
-      size: level[1]
-    }));
+    const parseLevels = (levels: any[]): OrderbookLevel[] =>
+      levels.map((level: any) => {
+        const price = typeof level[0] === 'string' ? Math.round(parseFloat(level[0]) * 100) : level[0];
+        const size = typeof level[1] === 'string' ? parseFloat(level[1]) : level[1];
+        return { price, priceDollars: (price / 100).toFixed(2), size };
+      });
+
+    const yesLevels = parseLevels(rawYes);
+    const noLevels = parseLevels(rawNo);
 
     yesLevels.sort((a, b) => b.price - a.price);
     noLevels.sort((a, b) => b.price - a.price);
@@ -75,20 +77,24 @@ export default function OrderbookLadder({ marketTicker, wsUrl = 'ws://localhost:
       const side = msg.side === 'yes' ? 'yes' : 'no';
       const levels = [...prev[side]];
 
-      const existingIndex = levels.findIndex(l => l.price === msg.price);
+      // Support both old format (price/delta as int) and new format (price_dollars/delta_fp as string)
+      const price = msg.price_dollars ? Math.round(parseFloat(msg.price_dollars) * 100) : msg.price;
+      const delta = msg.delta_fp ? parseFloat(msg.delta_fp) : msg.delta;
+
+      const existingIndex = levels.findIndex(l => l.price === price);
 
       if (existingIndex >= 0) {
-        const newSize = levels[existingIndex].size + msg.delta;
+        const newSize = levels[existingIndex].size + delta;
         if (newSize <= 0) {
           levels.splice(existingIndex, 1);
         } else {
           levels[existingIndex] = { ...levels[existingIndex], size: newSize };
         }
-      } else if (msg.delta > 0) {
+      } else if (delta > 0) {
         levels.push({
-          price: msg.price,
-          priceDollars: msg.price.toString(),
-          size: msg.delta
+          price,
+          priceDollars: (price / 100).toFixed(2),
+          size: delta
         });
       }
 

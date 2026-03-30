@@ -15,7 +15,7 @@ from . import live_inference
 from .trader import TraderState, TradingParams, evaluate_and_trade
 
 # Add nba/ to path so we can import build_prediction_row
-_NBA_DIR = Path(__file__).parent.parent.parent.parent / "nba"
+_NBA_DIR = Path(__file__).parent.parent.parent.parent / "nba" / "scripts"
 if str(_NBA_DIR) not in sys.path:
     sys.path.insert(0, str(_NBA_DIR))
 

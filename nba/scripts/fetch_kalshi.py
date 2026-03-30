@@ -17,11 +17,13 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from dotenv import load_dotenv
 
 # Load .env from project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# __file__ is now in nba/scripts/, so parent.parent = kalshi-bot/
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-# Default output directory (works from any cwd)
-DEFAULT_OUT_DIR = Path(__file__).resolve().parent / "data" / "kalshi_live"
+# Default output directory: nba/data/kalshi_live
+NBA_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_OUT_DIR = NBA_DIR / "data" / "kalshi_live"
 
 # Hardcoded Kalshi API configuration
 KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"

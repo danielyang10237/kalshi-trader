@@ -85,7 +85,12 @@ class KalshiStream:
         headers = make_auth_headers(self._private_key, self.key_id, "GET", WS_PATH)
         print(f"[kalshi] Connecting to {self.ws_url} with key_id={self.key_id[:8]}...")
 
-        async with websockets.connect(self.ws_url, extra_headers=headers) as ws:
+        # Try both kwarg names for websockets version compatibility
+        try:
+            ws = await websockets.connect(self.ws_url, additional_headers=headers)
+        except TypeError:
+            ws = await websockets.connect(self.ws_url, extra_headers=headers)
+        try:
             print(f"[kalshi] connected: {self.ws_url}")
 
             sub: Dict[str, Any] = {
@@ -106,6 +111,8 @@ class KalshiStream:
                     self.out_queue.put_nowait(msg)
                 except asyncio.QueueFull:
                     pass
+        finally:
+            await ws.close()
 
 class StreamFactory:
     """Factory for creating pre-configured streams"""
@@ -154,7 +161,7 @@ class KalshiClient:
         self._private_key = load_private_key(private_key_path)
 
         # REST config
-        self.base_url = api_url.replace("wss://", "https://").replace("/trade-api/ws/v2", "")
+        self.base_url = api_url.replace("wss://", "https://").replace("ws://", "http://").replace("/trade-api/ws/v2", "")
         self.api_base = f"{self.base_url}/trade-api/v2"
 
         # REST sub-APIs

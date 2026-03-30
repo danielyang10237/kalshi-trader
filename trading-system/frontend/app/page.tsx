@@ -5,11 +5,13 @@ import {
   fetchSeries,
   fetchMarkets,
   fetchConfiguredSeriesTickers,
+  fetchTradingEvents,
   fetchEvents,
   fetchMarketsByEvent,
   fetchSeriesTags,
   addSeriesTicker,
   clearCachedFills,
+  deployNbaModels,
   Series,
   Market,
   Event
@@ -17,6 +19,8 @@ import {
 
 export default function Home() {
   // By Event state
+  const [tradingEvents, setTradingEvents] = useState<Record<string, string[]>>({});
+  const [selectedCategory, setSelectedCategory] = useState<string>('');
   const [eventSeriesTicker, setEventSeriesTicker] = useState<string>('');
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<string>('');
@@ -44,6 +48,10 @@ export default function Home() {
   const [seriesSearchTerm, setSeriesSearchTerm] = useState('');
   const [addingTicker, setAddingTicker] = useState(false);
 
+  // NBA deploy state
+  const [deployingModels, setDeployingModels] = useState(false);
+  const [deployResult, setDeployResult] = useState<{ copied: string[]; errors: string[] } | null>(null);
+
   // Shared state
   const [configuredSeriesTickers, setConfiguredSeriesTickers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -54,13 +62,15 @@ export default function Home() {
     const loadInitialData = async () => {
       try {
         setLoading(true);
-        const [seriesData, configData, tagsData] = await Promise.all([
+        const [seriesData, configData, tradingEventsData, tagsData] = await Promise.all([
           fetchSeries(200),
           fetchConfiguredSeriesTickers(),
+          fetchTradingEvents(),
           fetchSeriesTags()
         ]);
         setSeries(seriesData.series || []);
         setConfiguredSeriesTickers(configData.series_tickers || []);
+        setTradingEvents(tradingEventsData.trading_events || {});
         setAvailableTags(tagsData || []);
         setError(null);
       } catch (err) {
@@ -280,73 +290,134 @@ export default function Home() {
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden flex flex-col">
           <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-blue-50 dark:bg-blue-900/20">
             <h2 className="text-lg font-bold text-gray-900 dark:text-white">By Event</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Series → Event → Market</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Event → Series → Market</p>
           </div>
-          
+
           <div className="p-4 space-y-4 overflow-y-auto flex-1">
-            {/* Series Ticker Select */}
+            {/* Event Category Select */}
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                1. Series Ticker
+                1. Event
               </label>
               <select
-                value={eventSeriesTicker}
+                value={selectedCategory}
                 onChange={(e) => {
-                  setEventSeriesTicker(e.target.value);
+                  setSelectedCategory(e.target.value);
+                  setEventSeriesTicker('');
                   setSelectedEvent('');
+                  setEvents([]);
+                  setEventMarkets([]);
                 }}
                 className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
-                <option value="">-- Select series --</option>
-                {configuredSeriesTickers.map((ticker) => (
-                  <option key={ticker} value={ticker}>{ticker}</option>
+                <option value="">-- Select event --</option>
+                {Object.keys(tradingEvents).map((category) => (
+                  <option key={category} value={category}>{category.toUpperCase()}</option>
                 ))}
               </select>
             </div>
 
-            {/* Event Select */}
-            {eventSeriesTicker && (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  2. Event
-                </label>
-                {eventsLoading ? (
-                  <div className="text-sm text-gray-500">Loading...</div>
-                ) : events.length === 0 ? (
-                  <div className="text-sm text-gray-500">No events found</div>
-                ) : (
+            {/* Event Panel */}
+            {selectedCategory && tradingEvents[selectedCategory] && (
+              <div className="border border-gray-200 dark:border-gray-600 rounded-lg p-3 space-y-3">
+                <h3 className="text-sm font-bold text-gray-900 dark:text-white">{selectedCategory.toUpperCase()}</h3>
+
+                {/* NBA-specific: Deploy Models */}
+                {selectedCategory === 'nba' && (
+                  <div>
+                    <button
+                      onClick={async () => {
+                        setDeployingModels(true);
+                        setDeployResult(null);
+                        try {
+                          const result = await deployNbaModels();
+                          setDeployResult({ copied: result.copied, errors: result.errors });
+                        } catch (err) {
+                          setDeployResult({ copied: [], errors: [err instanceof Error ? err.message : 'Deploy failed'] });
+                        } finally {
+                          setDeployingModels(false);
+                        }
+                      }}
+                      disabled={deployingModels}
+                      className="w-full px-3 py-2 bg-orange-600 hover:bg-orange-700 disabled:bg-orange-400 text-white text-xs rounded font-medium transition-colors"
+                    >
+                      {deployingModels ? 'Deploying...' : 'Deploy Latest Models'}
+                    </button>
+                    {deployResult && (
+                      <div className={`mt-1 text-xs ${deployResult.errors.length > 0 && deployResult.copied.length === 0 ? 'text-red-500' : 'text-green-600 dark:text-green-400'}`}>
+                        {deployResult.copied.length > 0 && <div>Deployed {deployResult.copied.length} files</div>}
+                        {deployResult.errors.map((e, i) => <div key={i} className="text-red-500">{e}</div>)}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Series Ticker Select */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Series Ticker
+                  </label>
                   <select
-                    value={selectedEvent}
+                    value={eventSeriesTicker}
                     onChange={(e) => {
-                      setSelectedEvent(e.target.value);
+                      setEventSeriesTicker(e.target.value);
+                      setSelectedEvent('');
+                      setEventMarkets([]);
                     }}
                     className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   >
-                    <option value="">-- Select event --</option>
-                    {events.map((event) => (
-                      <option key={event.event_ticker} value={event.event_ticker}>
-                        {event.title} {event.sub_title && `- ${event.sub_title}`}
-                      </option>
+                    <option value="">-- Select series --</option>
+                    {tradingEvents[selectedCategory].map((ticker) => (
+                      <option key={ticker} value={ticker}>{ticker}</option>
                     ))}
                   </select>
-                )}
-              </div>
-            )}
+                </div>
 
-            {/* Trade Button */}
-            {selectedEvent && (
-              <div>
-                {eventMarketsLoading ? (
-                  <div className="text-sm text-gray-500">Loading markets...</div>
-                ) : eventMarkets.length === 0 ? (
-                  <div className="text-sm text-gray-500">No markets found</div>
-                ) : (
-                  <button
-                    onClick={() => navigateToOrderbook(eventMarkets[0].ticker, eventSeriesTicker, selectedEvent)}
-                    className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition-colors"
-                  >
-                    Trade ({eventMarkets.length} contracts) →
-                  </button>
+                {/* Event Select */}
+                {eventSeriesTicker && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                      Game / Event
+                    </label>
+                    {eventsLoading ? (
+                      <div className="text-sm text-gray-500">Loading...</div>
+                    ) : events.length === 0 ? (
+                      <div className="text-sm text-gray-500">No events found</div>
+                    ) : (
+                      <select
+                        value={selectedEvent}
+                        onChange={(e) => {
+                          setSelectedEvent(e.target.value);
+                        }}
+                        className="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      >
+                        <option value="">-- Select --</option>
+                        {events.map((event) => (
+                          <option key={event.event_ticker} value={event.event_ticker}>
+                            {event.title} {event.sub_title && `- ${event.sub_title}`}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
+
+                {/* Trade Button */}
+                {selectedEvent && (
+                  <div>
+                    {eventMarketsLoading ? (
+                      <div className="text-sm text-gray-500">Loading markets...</div>
+                    ) : eventMarkets.length === 0 ? (
+                      <div className="text-sm text-gray-500">No markets found</div>
+                    ) : (
+                      <button
+                        onClick={() => navigateToOrderbook(eventMarkets[0].ticker, eventSeriesTicker, selectedEvent)}
+                        className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg font-medium transition-colors"
+                      >
+                        Trade ({eventMarkets.length} contracts) →
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             )}

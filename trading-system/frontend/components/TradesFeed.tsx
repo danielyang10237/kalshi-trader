@@ -82,7 +82,16 @@ export default function TradesFeed({
             
             // Handle trade updates
             if (data.type === 'trade' && data.msg) {
-              const trade: Trade = data.msg;
+              const raw = data.msg;
+              // Support both old format (yes_price in cents) and new format (yes_price_dollars as string)
+              const trade: Trade = {
+                market_ticker: raw.market_ticker,
+                yes_price: raw.yes_price ?? Math.round(parseFloat(raw.yes_price_dollars || '0') * 100),
+                no_price: raw.no_price ?? Math.round(parseFloat(raw.no_price_dollars || '0') * 100),
+                count: raw.count ?? parseFloat(raw.count_fp || '0'),
+                taker_side: raw.taker_side,
+                ts: raw.ts ?? Date.now() / 1000,
+              };
               
               // Only add if it matches our market (backend should filter, but double-check)
               if (trade.market_ticker === marketTicker) {

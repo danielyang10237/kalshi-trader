@@ -18,7 +18,8 @@ import pandas as pd
 
 # ── Paths (relative to nba/) ──────────────────────────────────────────────
 
-BASE_DIR = Path(__file__).parent
+# __file__ is in nba/scripts/, so parent.parent = nba/
+BASE_DIR = Path(__file__).parent.parent
 TRAINING_CSV = BASE_DIR / "data" / "training_games.csv"
 PLAYER_STATS_DIR = BASE_DIR / "data" / "player_stats"
 TEAMS_CSV = BASE_DIR / "data" / "nba_teams.csv"

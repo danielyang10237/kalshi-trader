@@ -53,22 +53,26 @@ async def ws_orderbook(ws: WebSocket, market_ticker: str):
         try:
             while True:
                 msg = await stream.out_queue.get()
+                print(f"[ws_orderbook] RAW msg (first 200): {msg[:200]}")
                 # Feed best ask to any engine tracking this ticker
                 try:
                     parsed = json.loads(msg)
                     inner = json.loads(parsed) if isinstance(parsed, str) else parsed
                     # Extract best ask from orderbook snapshot/delta
-                    asks = inner.get("yes", inner.get("msg", {})).get("yes", []) if isinstance(inner, dict) else []
-                    if not asks and isinstance(inner, dict):
-                        # Try alternate structure: msg.yes for asks
-                        msg_data = inner.get("msg", {})
-                        if isinstance(msg_data, dict):
-                            asks = msg_data.get("yes", [])
+                    msg_data = inner.get("msg", {}) if isinstance(inner, dict) else {}
+                    # Support both old (yes/no) and new (yes_dollars_fp/no_dollars_fp) formats
+                    asks = msg_data.get("yes", []) or msg_data.get("yes_dollars_fp", [])
                     # Find best (lowest) ask
                     best_ask = None
                     if asks and isinstance(asks, list):
                         for level in asks:
-                            price = level[0] if isinstance(level, list) else level.get("price", 0)
+                            if isinstance(level, list) and len(level) >= 1:
+                                price = float(level[0]) if isinstance(level[0], str) else level[0]
+                                # Convert dollars to cents if needed
+                                if isinstance(level[0], str) and price < 1.0:
+                                    price = round(price * 100)
+                            else:
+                                price = level.get("price", 0)
                             if price and (best_ask is None or price < best_ask):
                                 best_ask = price
                     if best_ask is not None:
@@ -109,6 +113,7 @@ async def ws_trades(ws: WebSocket, market_ticker: str):
         try:
             while True:
                 msg = await stream.out_queue.get()
+                print(f"[ws_trades] RAW msg (first 200): {msg[:200]}")
                 await ws.send_text(msg)
         except Exception as e:
             print(f"[ws_trades] Error forwarding: {e}")

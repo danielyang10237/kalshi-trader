@@ -1,0 +1,57 @@
+[
+  {
+    "game_id": "401809236",
+    "away_team": "OKC",
+    "home_team": "IND",
+    "date": "2025-10-23",
+    "home_ticker": "KXNBAGAME-25OCT23OKCIND-IND",
+    "away_ticker": "KXNBAGAME-25OCT23OKCIND-OKC",
+    "note": "2OT",
+    "kalshi_file": "401809236_OKC_IND_kalshi_100ms.csv",
+    "pbp_file": "401809236_OKC_IND.csv"
+  },
+  {
+    "game_id": "401809243",
+    "away_team": "HOU",
+    "home_team": "OKC",
+    "date": "2025-10-21",
+    "home_ticker": "KXNBAGAME-25OCT21HOUOKC-OKC",
+    "away_ticker": "KXNBAGAME-25OCT21HOUOKC-HOU",
+    "note": "2OT",
+    "kalshi_file": "401809243_HOU_OKC_kalshi_100ms.csv",
+    "pbp_file": "401809243_HOU_OKC.csv"
+  },
+  {
+    "game_id": "401810079",
+    "away_team": "DEN",
+    "home_team": "LAC",
+    "date": "2025-11-12",
+    "home_ticker": "KXNBAGAME-25NOV12DENLAC-LAC",
+    "away_ticker": "KXNBAGAME-25NOV12DENLAC-DEN",
+    "note": "Blowout (DEN +14)",
+    "kalshi_file": "401810079_DEN_LAC_kalshi_100ms.csv",
+    "pbp_file": "401810079_DEN_LAC.csv"
+  },
+  {
+    "game_id": "401810628",
+    "away_team": "DAL",
+    "home_team": "PHX",
+    "date": "2026-02-10",
+    "home_ticker": "KXNBAGAME-26FEB10DALPHX-PHX",
+    "away_ticker": "KXNBAGAME-26FEB10DALPHX-DAL",
+    "note": "PHX win by 9",
+    "kalshi_file": "401810628_DAL_PHX_kalshi_100ms.csv",
+    "pbp_file": "401810628_DAL_PHX.csv"
+  },
+  {
+    "game_id": "401810812",
+    "away_team": "MIL",
+    "home_team": "MIA",
+    "date": "2026-03-12",
+    "home_ticker": "KXNBAGAME-26MAR12MILMIA-MIA",
+    "away_ticker": "KXNBAGAME-26MAR12MILMIA-MIL",
+    "note": "MIA win by 7",
+    "kalshi_file": "401810812_MIL_MIA_kalshi_100ms.csv",
+    "pbp_file": "401810812_MIL_MIA.csv"
+  }
+]

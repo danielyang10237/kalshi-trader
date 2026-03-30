@@ -1,6 +1,6 @@
 {
   "model_type": "XGBClassifier",
-  "n_estimators": 367,
+  "n_estimators": 612,
   "hyperparameters": {
     "n_estimators": 1000,
     "learning_rate": 0.02,
@@ -180,9 +180,9 @@
     2024,
     2025
   ],
-  "train_games": 6488,
+  "train_games": 6514,
   "train_date_range": [
     "2020-07-30",
-    "2026-03-09"
+    "2026-03-12"
   ]
 }

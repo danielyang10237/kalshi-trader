@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import OrderbookLadder from '@/components/OrderbookLadder';
 import CandlestickChart from '@/components/CandlestickChart';
@@ -65,7 +65,7 @@ interface LimitOrderPanel {
   reduceOnly: boolean;
 }
 
-export default function OrderbookPage() {
+function OrderbookPageContent() {
   const searchParams = useSearchParams();
   const tickerParam = searchParams.get('ticker');
   const seriesParam = searchParams.get('series');
@@ -1600,5 +1600,13 @@ export default function OrderbookPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function OrderbookPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <OrderbookPageContent />
+    </Suspense>
   );
 }
