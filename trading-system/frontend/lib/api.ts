@@ -433,12 +433,16 @@ export async function deployNbaModels(): Promise<{ success: boolean; copied: str
 // ---------- NBA Trading Engine ----------
 
 export interface TradingParams {
-  min_edge: number;
+  min_size: number;
+  max_size: number;
   max_position: number;
   max_exposure: number;
-  order_size: number;
-  edge_decay: number | null;
-  wp_change_threshold: number;
+  fee_rate: number;
+  delta_scale: number;
+  min_delta: number;
+  delta_full_scale: number;
+  aggression: number;
+  exit_offset: number;
   enabled: boolean;
 }
 
@@ -451,10 +455,19 @@ export interface TraderState {
   home_ticker: string | null;
   away_ticker: string | null;
   home_position: number;
-  away_position: number;
   home_cost: number;
-  away_cost: number;
   total_exposure: number;
+  last_theo: number | null;
+  last_p_kalshi: number | null;
+  last_p_computed: number | null;
+  prev_p_kalshi: number | null;
+  last_model_delta: number | null;
+  last_expected_move: number | null;
+  last_direction: string | null;
+  last_order_price: number | null;
+  last_size: number | null;
+  last_fair: number | null;
+  last_exit_price: number | null;
   recent_trades: any[];
 }
 
@@ -470,8 +483,10 @@ export interface EngineStatus {
   home_quality: number;
   away_quality: number;
   prior_home_wp: number | null;
+  kalshi_pregame_wp: number | null;
   home_wp?: number | null;
   snapshot_count?: number;
+  model_features?: Record<string, number | boolean> | null;
   trader?: TraderState;
 }
 

@@ -1,9 +1,10 @@
-"""Live in-game GAM inference.
+"""Live in-game XGBoost inference.
 
-Loads the trained posterior GAM models and computes P(home_win)
+Loads the trained posterior XGBoost model and computes P(home_win)
 from a live game snapshot sent by the iOS client.
 """
 
+import json
 import logging
 import math
 import sys
@@ -13,13 +14,14 @@ from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
+import xgboost as xgb
 
 logger = logging.getLogger(__name__)
 
 # --------------- paths ---------------
 
 _NBA_DIR = Path(__file__).parent.parent.parent.parent / "nba"
-_ARTIFACTS_DIR = _NBA_DIR / "artifacts"
+_ARTIFACTS_DIR = _NBA_DIR / "posterior_models" / "deployment"
 _DATA_DIR = _NBA_DIR / "data"
 
 # --------------- constants ---------------
@@ -37,52 +39,52 @@ _TIME_RANGE_SEC = {
     # "5-0" uses timer_seconds directly
 }
 
-# --------------- feature lists (must match training) ---------------
+# --------------- feature list (must match training) ---------------
 
-GAM_REG_FEATURES = [
-    "score_diff", "t_reg_norm", "pregame_logit",
+XGBOOST_FEATURES = [
+    "score_diff",
+    "t_reg_remaining", "t_reg_norm", "t_reg_log",
+    "t_ot_remaining", "t_ot_norm", "t_ot_log",
+    "is_ot", "ot_number",
+    "pregame_logit",
     "efg_diff", "ts_diff", "off_rtg_diff",
     "tov_diff",
     "foul_diff", "ft_pct_diff", "timeout_diff",
     "bonus_diff", "is_home_poss_signed",
     "rest_diff", "roster_quality_diff", "win_pct_diff",
     "stl_diff", "fg3_pct_diff", "fta_rate_diff",
-]
-
-GAM_OT_FEATURES = [
-    "score_diff", "t_ot_norm", "pregame_logit", "ot_number",
-    "efg_diff", "ts_diff", "off_rtg_diff",
-    "tov_diff",
-    "foul_diff", "ft_pct_diff", "timeout_diff",
-    "bonus_diff", "is_home_poss_signed",
-    "rest_diff", "roster_quality_diff", "win_pct_diff",
-    "stl_diff", "fg3_pct_diff", "fta_rate_diff",
+    "pending_ft_signed", "is_dead_ball",
+    "poss_x_elapsed", "ft_x_elapsed",
 ]
 
 # --------------- model singletons ---------------
 
-_reg_model = None
-_ot_model = None
+_model = None
 _iso_cal = None
-_gam_config: dict = {}
+_hp: dict = {}
 _season_baselines: dict = {}  # team -> {efg, ts, off_rtg, ft_pct, ...}
 _warmed = False
 
 
 def warmup():
     """Load models and season baselines. Call once at server startup."""
-    global _reg_model, _ot_model, _iso_cal, _gam_config, _season_baselines, _warmed
+    global _model, _iso_cal, _hp, _season_baselines, _warmed
     if _warmed:
         return
 
     try:
-        _reg_model = joblib.load(_ARTIFACTS_DIR / "gam_reg.pkl")
-        _ot_model = joblib.load(_ARTIFACTS_DIR / "gam_ot.pkl")
-        _iso_cal = joblib.load(_ARTIFACTS_DIR / "iso_gam_post.pkl")
-        _gam_config = joblib.load(_ARTIFACTS_DIR / "gam_config.pkl")
-        logger.info(f"Loaded GAM models from {_ARTIFACTS_DIR}")
+        _model = xgb.XGBClassifier()
+        _model.load_model(str(_ARTIFACTS_DIR / "xgb_posterior.json"))
+        _iso_cal = joblib.load(_ARTIFACTS_DIR / "iso_xgb_post.pkl")
+        hp_path = _ARTIFACTS_DIR / "best_hyperparams.json"
+        if hp_path.exists():
+            with open(hp_path) as f:
+                _hp = json.load(f)
+        logger.info(f"Loaded XGBoost model from {_ARTIFACTS_DIR}")
+        logger.info(f"  Hyperparams: alpha={_hp.get('prior_alpha')}, "
+                     f"terminal_sec={_hp.get('terminal_sec')}")
     except Exception as e:
-        logger.error(f"Failed to load GAM models: {e}")
+        logger.error(f"Failed to load XGBoost model: {e}")
         return
 
     # Build season baselines from training_games.csv
@@ -107,7 +109,6 @@ def _compute_season_baselines() -> dict:
     teams = set(df["home_team"].unique()) | set(df["away_team"].unique())
 
     for team in teams:
-        # Games where this team played (home or away)
         home_games = df[df["home_team"] == team]
         away_games = df[df["away_team"] == team]
 
@@ -120,7 +121,6 @@ def _compute_season_baselines() -> dict:
         total_oreb = home_games["home_OREB"].sum() + away_games["away_OREB"].sum()
         total_tov = home_games["home_TO"].sum() + away_games["away_TO"].sum()
 
-        # Possessions estimate
         total_poss = total_fga - total_oreb + total_tov + 0.44 * total_fta
         total_poss = max(total_poss, 1)
 
@@ -159,7 +159,6 @@ def _safe_div(num: float, den: float, default: float = 0.0) -> float:
 
 
 def _estimate_possessions(stats: dict) -> float:
-    """Estimate possessions from box score stats."""
     fga = stats.get("fga", 0)
     oreb = stats.get("oreb", 0)
     tov = stats.get("tov", 0)
@@ -179,33 +178,35 @@ def _time_features(snapshot: dict) -> dict:
     ot_number = max(0, quarter - 4)
 
     if is_ot:
-        # OT: use timer_seconds directly
         sec_remaining = timer_seconds
         t_reg_remaining = 0
         t_ot_remaining = sec_remaining
     else:
-        # Regulation: convert quarter + time_range to seconds remaining
         if quarter == 4 and time_range == "5-0":
             sec_remaining = timer_seconds
         elif time_range in _TIME_RANGE_SEC:
             sec_remaining = _TIME_RANGE_SEC[time_range]
         else:
-            sec_remaining = 360  # default to midpoint of period
+            sec_remaining = 360
 
-        # Total regulation seconds remaining
         periods_after = 4 - quarter
         t_reg_remaining = periods_after * REG_PERIOD_SEC + sec_remaining
         t_ot_remaining = 0
 
     t_reg_norm = t_reg_remaining / TOTAL_REG_SEC
+    t_reg_log = math.log1p(t_reg_norm * 100) / math.log1p(100)
     t_ot_norm = t_ot_remaining / OT_PERIOD_SEC if OT_PERIOD_SEC > 0 else 0
+    t_ot_log = math.log1p(t_ot_norm * 100) / math.log1p(100) if is_ot else 0.0
 
     return {
         "is_ot": is_ot,
         "ot_number": ot_number,
-        "t_reg_norm": t_reg_norm,
-        "t_ot_norm": t_ot_norm,
         "t_reg_remaining": t_reg_remaining,
+        "t_reg_norm": t_reg_norm,
+        "t_reg_log": t_reg_log,
+        "t_ot_remaining": t_ot_remaining,
+        "t_ot_norm": t_ot_norm,
+        "t_ot_log": t_ot_log,
     }
 
 
@@ -218,27 +219,11 @@ def snapshot_to_features(
     home_team: str = "",
     away_team: str = "",
 ) -> dict:
-    """Convert a live snapshot dict to the full GAM feature dict.
-
-    Parameters
-    ----------
-    snapshot : dict
-        Full game snapshot from the iOS client. Expected keys:
-        home: {score, fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, tov, stl, pf,
-               timeouts_used, period_fouls: {"1": n, ...}}
-        away: {same structure}
-        quarter, time_range, timer_seconds, possession
-    prior_home_wp : float
-        Pre-game P(home_win) from XGBoost prior model.
-    rest_diff, roster_quality_diff, win_pct_diff : float
-        Pre-game features (computed once at engine start).
-    home_team, away_team : str
-        Team abbreviations for season baseline lookup.
-    """
+    """Convert a live snapshot dict to the full XGBoost feature dict."""
     home = snapshot.get("home", {})
     away = snapshot.get("away", {})
 
-    tau = _gam_config.get("tau", 200)
+    tau = _hp.get("tau", 200)
 
     # --- Score diff ---
     score_diff = home.get("score", 0) - away.get("score", 0)
@@ -284,10 +269,8 @@ def snapshot_to_features(
     h_base = _season_baselines.get(home_team, {})
     a_base = _season_baselines.get(away_team, {})
 
-    # Blending weight: early game leans on season, late game on in-game
     w = math.exp(-total_poss / tau) if tau > 0 else 0.0
 
-    # In-game efg, ts, off_rtg
     h_efg_ig = _safe_div(h_fgm + 0.5 * h_fg3m, h_fga, 0.5)
     a_efg_ig = _safe_div(a_fgm + 0.5 * a_fg3m, a_fga, 0.5)
     h_ts_ig = _safe_div(h_pts, 2 * (h_fga + 0.44 * h_fta), 0.5)
@@ -295,7 +278,6 @@ def snapshot_to_features(
     h_offrtg_ig = 100 * h_pts / h_poss if h_poss > 0 else 100.0
     a_offrtg_ig = 100 * a_pts / a_poss if a_poss > 0 else 100.0
 
-    # Blended
     h_efg = w * h_base.get("efg", 0.5) + (1 - w) * h_efg_ig
     a_efg = w * a_base.get("efg", 0.5) + (1 - w) * a_efg_ig
     h_ts = w * h_base.get("ts", 0.5) + (1 - w) * h_ts_ig
@@ -307,22 +289,18 @@ def snapshot_to_features(
     ts_diff = h_ts - a_ts
     off_rtg_diff = h_offrtg - a_offrtg
 
-    # --- Count diffs (no blending) ---
-    tov_diff = a_tov - h_tov  # inverted: fewer turnovers is better for home
-    foul_diff = a_pf - h_pf   # inverted: opponent fouls benefit home
+    tov_diff = a_tov - h_tov
+    foul_diff = a_pf - h_pf
     stl_diff = h_stl - a_stl
 
-    # --- FT pct blending ---
     h_ft_ig = _safe_div(h_ftm, h_fta, 0.75)
     a_ft_ig = _safe_div(a_ftm, a_fta, 0.75)
     h_ft = w * h_base.get("ft_pct", 0.75) + (1 - w) * h_ft_ig
     a_ft = w * a_base.get("ft_pct", 0.75) + (1 - w) * a_ft_ig
     ft_pct_diff = h_ft - a_ft
 
-    # --- Timeout diff (inverted: away - home) ---
     timeout_diff = a_to_used - h_to_used
 
-    # --- Extra in-game stats ---
     fg3_pct_diff = _safe_div(h_fg3m, max(h_fga, 1)) - _safe_div(a_fg3m, max(a_fga, 1))
     fta_rate_diff = _safe_div(h_fta, max(h_fga, 1)) - _safe_div(a_fta, max(a_fga, 1))
 
@@ -338,17 +316,30 @@ def snapshot_to_features(
     away_in_bonus = 1 if h_pf_period >= threshold else 0
     bonus_diff = home_in_bonus - away_in_bonus
 
-    # --- Win pct diff (from season baselines if not provided) ---
     if win_pct_diff == 0.0 and h_base and a_base:
         win_pct_diff = h_base.get("win_pct", 0.5) - a_base.get("win_pct", 0.5)
 
+    # --- Pending FTs and dead ball ---
+    pending_ft_signed = snapshot.get("pending_ft_signed", 0)
+    is_dead_ball = 1 if snapshot.get("is_dead_ball", False) else 0
+
+    # --- Time-weighted interaction features ---
+    t_log = tf["t_ot_log"] if tf["is_ot"] else tf["t_reg_log"]
+    elapsed = 1.0 - t_log
+    poss_x_elapsed = is_home_poss_signed * elapsed
+    ft_x_elapsed = pending_ft_signed * elapsed
+
     return {
         "score_diff": score_diff,
+        "t_reg_remaining": tf["t_reg_remaining"],
         "t_reg_norm": tf["t_reg_norm"],
+        "t_reg_log": tf["t_reg_log"],
+        "t_ot_remaining": tf["t_ot_remaining"],
         "t_ot_norm": tf["t_ot_norm"],
-        "pregame_logit": pregame_logit,
+        "t_ot_log": tf["t_ot_log"],
         "is_ot": tf["is_ot"],
         "ot_number": tf["ot_number"],
+        "pregame_logit": pregame_logit,
         "efg_diff": efg_diff,
         "ts_diff": ts_diff,
         "off_rtg_diff": off_rtg_diff,
@@ -364,8 +355,10 @@ def snapshot_to_features(
         "stl_diff": stl_diff,
         "fg3_pct_diff": fg3_pct_diff,
         "fta_rate_diff": fta_rate_diff,
-        # Keep for postprocessing
-        "_t_reg_remaining": tf["t_reg_remaining"],
+        "pending_ft_signed": pending_ft_signed,
+        "is_dead_ball": is_dead_ball,
+        "poss_x_elapsed": poss_x_elapsed,
+        "ft_x_elapsed": ft_x_elapsed,
     }
 
 
@@ -382,9 +375,9 @@ def predict_home_wp(
 ) -> Optional[float]:
     """Compute P(home_win) from a live game snapshot.
 
-    Returns None if models are not loaded.
+    Returns None if model is not loaded.
     """
-    if _reg_model is None or _ot_model is None:
+    if _model is None:
         return None
 
     feats = snapshot_to_features(
@@ -396,27 +389,10 @@ def predict_home_wp(
         away_team=away_team,
     )
 
-    is_ot = feats["is_ot"]
-
-    # Select model and features
-    if is_ot:
-        model = _ot_model
-        feat_names = GAM_OT_FEATURES
-    else:
-        model = _reg_model
-        feat_names = GAM_REG_FEATURES
-
-    X = np.array([[feats[f] for f in feat_names]])
-    p_raw = float(model.predict_proba(X)[0])
+    # Single unified model — no reg/OT split
+    X = np.array([[feats[f] for f in XGBOOST_FEATURES]], dtype=np.float32)
+    p_raw = float(_model.predict_proba(X)[0][1])
     p_raw = max(1e-7, min(1 - 1e-7, p_raw))
-
-    # Debug: log key features and model output
-    logger.info(
-        f"[GAM] home={home_team} away={away_team} | "
-        f"score_diff={feats['score_diff']} t_reg_norm={feats['t_reg_norm']:.3f} "
-        f"pregame_logit={feats['pregame_logit']:.3f} | "
-        f"p_raw={p_raw:.4f} prior={prior_home_wp:.4f} p_post(before_iso)={_postprocess(p_raw, feats, prior_home_wp):.4f}"
-    )
 
     # --- Postprocessing: prior anchoring + terminal convergence ---
     p_post = _postprocess(p_raw, feats, prior_home_wp)
@@ -437,39 +413,36 @@ def _postprocess(
     p_raw: float,
     feats: dict,
     prior_home_wp: float,
-    alpha: float = 2.0,
-    terminal_sec: float = 30.0,
 ) -> float:
-    """Apply prior anchoring and terminal convergence."""
-    is_ot = feats["is_ot"]
-    t_reg_remaining = feats["_t_reg_remaining"]
+    """Apply prior anchoring + data-calibrated terminal convergence."""
+    alpha = _hp.get("prior_alpha", 2.0)
+    terminal_sec = _hp.get("terminal_sec", 30.0)
 
-    # 1) Prior anchoring (regulation only)
+    is_ot = feats["is_ot"]
+    t_reg_remaining = feats["t_reg_remaining"]
+    t_ot_remaining = feats["t_ot_remaining"]
+
+    # Step 1: Prior anchoring (regulation only)
     if not is_ot and prior_home_wp is not None:
         t_reg_norm = feats["t_reg_norm"]
-        prior_weight = t_reg_norm ** alpha  # 1.0 at start, 0.0 at end
+        prior_weight = t_reg_norm ** alpha
         logit_raw = _logit(p_raw)
         logit_prior = _logit(prior_home_wp)
         logit_blended = (1 - prior_weight) * logit_raw + prior_weight * logit_prior
-        p_post = _sigmoid(logit_blended)
+        p = _sigmoid(logit_blended)
     else:
-        p_post = p_raw
+        p = p_raw
 
-    # 2) Terminal convergence
+    # Step 2: Terminal convergence
     score_diff = feats["score_diff"]
-    if is_ot:
-        t_remaining = feats.get("t_ot_norm", 0) * OT_PERIOD_SEC
-    else:
-        t_remaining = t_reg_remaining
+    pending_ft = feats.get("pending_ft_signed", 0)
+    time_remaining = t_ot_remaining if is_ot else t_reg_remaining
 
-    if t_remaining <= terminal_sec and t_remaining >= 0:
-        blend = t_remaining / terminal_sec  # 1 at terminal_sec, 0 at buzzer
-        if score_diff > 0:
-            terminal_p = 1.0
-        elif score_diff < 0:
-            terminal_p = 0.0
-        else:
-            terminal_p = 0.5
-        p_post = blend * p_post + (1 - blend) * terminal_p
+    if time_remaining < terminal_sec and score_diff != 0 and pending_ft == 0:
+        time_factor = 1.0 - time_remaining / terminal_sec
+        score_factor = 1.0 / (1.0 + math.exp(-1.5 * (abs(score_diff) - 2.0)))
+        terminal_weight = time_factor * score_factor
+        deterministic = 1.0 if score_diff > 0 else 0.0
+        p = (1 - terminal_weight) * p + terminal_weight * deterministic
 
-    return max(1e-7, min(1 - 1e-7, p_post))
+    return max(1e-7, min(1 - 1e-7, p))

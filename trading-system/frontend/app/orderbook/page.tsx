@@ -114,11 +114,16 @@ function OrderbookPageContent() {
   // Trading params state
   const [tradingEnabled, setTradingEnabled] = useState(false);
   const [tradingParams, setTradingParams] = useState<Partial<TradingParams>>({
-    min_edge: 3,
+    min_size: 5,
+    max_size: 50,
     max_position: 200,
     max_exposure: 50000,
-    order_size: 10,
-    edge_decay: null,
+    fee_rate: 0.07,
+    delta_scale: 0.6,
+    min_delta: 0.03,
+    delta_full_scale: 0.08,
+    aggression: 0,
+    exit_offset: 0,
   });
 
   // Best prices from orderbook ladders: {yesBid, yesAsk} per market
@@ -680,55 +685,147 @@ function OrderbookPageContent() {
           </button>
         </div>
       )}
-      {/* Live model + market prices */}
-      {engineStatus?.is_live && engineStatus.trader && (
-        <div className="px-2 pb-2 border-t border-gray-700 pt-1.5 space-y-1">
-          <div className="flex justify-between text-[10px]">
-            <span className="text-gray-400">Model P(home)</span>
-            <span className="font-mono font-bold text-white">
-              {engineStatus.home_wp != null ? `${(engineStatus.home_wp * 100).toFixed(1)}¢` : '—'}
-            </span>
-          </div>
-          <div className="flex justify-between text-[10px]">
-            <span className="text-gray-400">Home Bid/Ask</span>
-            <span className="font-mono text-gray-300">
-              {engineStatus.trader.home_best_bid ?? '—'}¢ / {engineStatus.trader.home_best_ask ?? '—'}¢
-            </span>
-          </div>
-          <div className="flex justify-between text-[10px]">
-            <span className="text-gray-400">Away Bid/Ask</span>
-            <span className="font-mono text-gray-300">
-              {engineStatus.trader.away_best_bid ?? '—'}¢ / {engineStatus.trader.away_best_ask ?? '—'}¢
-            </span>
-          </div>
-          <div className="flex justify-between text-[10px]">
-            <span className="text-gray-400">Position H/A</span>
-            <span className="font-mono text-gray-300">
-              {engineStatus.trader.home_position} / {engineStatus.trader.away_position}
-            </span>
-          </div>
-          <div className="flex justify-between text-[10px]">
-            <span className="text-gray-400">Exposure</span>
-            <span className="font-mono text-gray-300">${(engineStatus.trader.total_exposure / 100).toFixed(2)}</span>
-          </div>
-          {engineStatus.trader.recent_trades.length > 0 && (
-            <div className="text-[9px] text-yellow-400 mt-1">
-              Last: {engineStatus.trader.recent_trades[engineStatus.trader.recent_trades.length - 1]?.action} {engineStatus.trader.recent_trades[engineStatus.trader.recent_trades.length - 1]?.side} {engineStatus.trader.recent_trades[engineStatus.trader.recent_trades.length - 1]?.size}@{engineStatus.trader.recent_trades[engineStatus.trader.recent_trades.length - 1]?.price}¢
+      {/* Delta-based trading display */}
+      {engineStatus?.is_live && engineStatus.trader && (() => {
+        const t = engineStatus.trader;
+        const mid = (t.home_best_bid != null && t.home_best_ask != null)
+          ? ((t.home_best_bid + t.home_best_ask) / 2).toFixed(1)
+          : null;
+        const delta = t.last_model_delta;
+        const expMove = t.last_expected_move;
+        const dir = t.last_direction;
+
+        return (
+          <div className="px-2 pb-2 border-t border-gray-700 pt-1.5 space-y-2">
+            {/* Posteriors */}
+            <div>
+              <div className="text-[9px] text-gray-500 font-semibold uppercase mb-1">Posteriors</div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">XGBoost Prior</span>
+                <span className="font-mono text-white">
+                  {engineStatus.prior_home_wp != null ? `${(engineStatus.prior_home_wp * 100).toFixed(1)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Kalshi Prior</span>
+                <span className="font-mono text-white">
+                  {engineStatus.kalshi_pregame_wp != null ? `${(engineStatus.kalshi_pregame_wp * 100).toFixed(1)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-blue-400">Kalshi Posterior</span>
+                <span className="font-mono font-bold text-blue-300">
+                  {t.last_p_kalshi != null ? `${(t.last_p_kalshi * 100).toFixed(1)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-purple-400">Computed Posterior</span>
+                <span className="font-mono font-bold text-purple-300">
+                  {t.last_p_computed != null ? `${(t.last_p_computed * 100).toFixed(1)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Market Mid</span>
+                <span className="font-mono text-gray-300">{mid ?? '—'}¢</span>
+              </div>
             </div>
-          )}
-        </div>
-      )}
+
+            {/* Delta Signal */}
+            <div>
+              <div className="text-[9px] text-gray-500 font-semibold uppercase mb-1">Delta Signal</div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Model Delta</span>
+                <span className={`font-mono font-bold ${delta != null && delta > 0 ? 'text-green-400' : delta != null && delta < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                  {delta != null ? `${delta > 0 ? '+' : ''}${(delta * 100).toFixed(2)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Expected Move</span>
+                <span className={`font-mono ${expMove != null && expMove > 0 ? 'text-green-400' : expMove != null && expMove < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                  {expMove != null ? `${expMove > 0 ? '+' : ''}${(expMove * 100).toFixed(2)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Fair Value</span>
+                <span className="font-mono text-white">
+                  {t.last_fair != null ? `${t.last_fair.toFixed(1)}¢` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Direction</span>
+                <span className={`font-mono font-bold ${dir === 'BUY' ? 'text-green-400' : dir === 'SELL' ? 'text-red-400' : 'text-gray-500'}`}>
+                  {dir ?? '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Threshold</span>
+                <span className="font-mono text-gray-300">
+                  {delta != null ? `|${(Math.abs(delta) * 100).toFixed(2)}¢| ${Math.abs(delta) >= t.params.min_delta ? '>' : '<'} ${(t.params.min_delta * 100).toFixed(1)}¢` : '—'}
+                  <span className={`ml-1 ${delta != null && Math.abs(delta) >= t.params.min_delta ? 'text-green-400' : 'text-yellow-400'}`}>
+                    {delta != null ? (Math.abs(delta) >= t.params.min_delta ? 'TRADE' : 'SKIP') : ''}
+                  </span>
+                </span>
+              </div>
+            </div>
+
+            {/* Order & Position */}
+            <div>
+              <div className="text-[9px] text-gray-500 font-semibold uppercase mb-1">Order & Position</div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Entry</span>
+                <span className="font-mono text-gray-300">
+                  {t.last_order_price != null && t.last_size != null && t.last_size > 0
+                    ? <>{dir === 'BUY' ? <span className="text-green-400">BUY</span> : <span className="text-red-400">SELL</span>} {t.last_size}@{t.last_order_price}¢</>
+                    : '— (no order)'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Exit</span>
+                <span className="font-mono text-gray-300">
+                  {t.last_exit_price != null && t.last_size != null && t.last_size > 0
+                    ? <>{dir === 'BUY' ? <span className="text-red-400">SELL</span> : <span className="text-green-400">BUY</span>} {t.last_size}@{t.last_exit_price}¢ <span className="text-gray-500">(GTC)</span></>
+                    : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Position</span>
+                <span className={`font-mono ${t.home_position > 0 ? 'text-green-400' : t.home_position < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+                  {t.home_position > 0 ? '+' : ''}{t.home_position} contracts
+                </span>
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className="text-gray-400">Exposure</span>
+                <span className="font-mono text-gray-300">${(t.total_exposure / 100).toFixed(2)}</span>
+              </div>
+            </div>
+
+            {/* Last trade */}
+            {t.recent_trades.length > 0 && (() => {
+              const last = t.recent_trades[t.recent_trades.length - 1];
+              return (
+                <div className="text-[9px] text-yellow-400 pt-1 border-t border-gray-700">
+                  Last: {last.direction} {last.size}@{last.order_price}¢ → exit@{last.exit_price ?? '?'}¢ | delta={last.model_delta > 0 ? '+' : ''}{(last.model_delta * 100).toFixed(2)}¢ {last.paper ? '[PAPER]' : ''}
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
     </div>
   );
 
   const renderTradingParamsEditor = () => {
     if (!engineStatus?.is_live) return null;
     const paramFields: { key: keyof TradingParams; label: string; suffix: string; step?: number }[] = [
-      { key: 'min_edge', label: 'Min Edge', suffix: '¢' },
-      { key: 'order_size', label: 'Order Size', suffix: ' contracts' },
+      { key: 'min_size', label: 'Min Size', suffix: ' contracts' },
+      { key: 'max_size', label: 'Max Size', suffix: ' contracts' },
       { key: 'max_position', label: 'Max Position', suffix: ' contracts' },
       { key: 'max_exposure', label: 'Max Exposure', suffix: '', step: 100 },
-      { key: 'wp_change_threshold', label: 'WP Δ Threshold', suffix: '', step: 0.001 },
+      { key: 'delta_scale', label: 'Delta Scale', suffix: '', step: 0.1 },
+      { key: 'min_delta', label: 'Min Delta', suffix: '', step: 0.005 },
+      { key: 'delta_full_scale', label: 'Full Scale', suffix: '', step: 0.01 },
+      { key: 'aggression', label: 'Entry Aggression', suffix: '¢' },
+      { key: 'exit_offset', label: 'Exit Offset', suffix: '¢' },
     ];
     return (
       <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
@@ -889,8 +986,33 @@ function OrderbookPageContent() {
           className="p-2 grid gap-2"
           style={{ gridTemplateColumns: '3fr 2fr 2fr 3fr' }}
         >
-          {/* Col 1: Market Bias + Candlesticks for both contracts */}
+          {/* Col 1: Model State + Market Bias + Candlesticks for both contracts */}
           <div className="flex flex-col gap-2">
+            {/* Model State */}
+            {engineStatus?.model_features && (
+              <div className="bg-gray-800 rounded-lg border border-gray-700 p-2">
+                <div className="text-[10px] font-semibold text-cyan-400 mb-1.5">GAM Model State</div>
+                <div className="grid grid-cols-4 gap-x-3 gap-y-0.5 text-[9px]">
+                  {Object.entries(engineStatus.model_features).map(([key, val]) => {
+                    const isHighlight = key === 'pending_ft_signed' || key === 'is_dead_ball';
+                    const isNonZero = typeof val === 'number' && val !== 0;
+                    return (
+                      <div key={key} className="flex justify-between gap-1">
+                        <span className="text-gray-500 truncate">{key.replace(/_/g, ' ')}</span>
+                        <span className={`font-mono ${
+                          isHighlight && isNonZero ? 'text-yellow-400 font-bold' :
+                          typeof val === 'number' && val > 0 ? 'text-green-400' :
+                          typeof val === 'number' && val < 0 ? 'text-red-400' :
+                          'text-gray-300'
+                        }`}>
+                          {typeof val === 'number' ? (Number.isInteger(val) ? val : val.toFixed(3)) : String(val)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Market Bias */}
             <div className="min-h-[35vh] rounded-lg border overflow-hidden bg-gray-800/30 border-gray-700/50">
               <MarketBias primaryTicker={activeMarket} secondaryTicker={secondaryMarket!} />

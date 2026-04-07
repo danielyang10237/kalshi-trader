@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 from .espn import fetch_roster, lookup_espn_game_id, parse_ticker, _load_static_roster
+from .game_cache import load_game, save_game
 from . import live_inference
-from .trader import TraderState, TradingParams, evaluate_and_trade
+from .trader import TraderState, TradingParams, cancel_and_requote
+from ..settings import settings
 
 # Add nba/ to path so we can import build_prediction_row
 _NBA_DIR = Path(__file__).parent.parent.parent.parent / "nba" / "scripts"
@@ -28,7 +30,10 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).parent.parent / "data"
 _ROSTER_DIR = _DATA_DIR / "nba_roster"
 # Player stats live in the nba research repo
-_PLAYER_STATS_DIR = Path(__file__).parent.parent.parent.parent / "nba" / "data" / "player_stats"
+_NBA_DATA_DIR = Path(__file__).parent.parent.parent.parent / "nba" / "data"
+_PREDICTIONS_FILE = _NBA_DATA_DIR / "games_predictions_deploy.csv"
+_PLAYER_STATS_DIR = _NBA_DATA_DIR / "player_stats"
+_GAME_ROSTERS_DIR = _NBA_DATA_DIR / "game_rosters"
 
 MIN_MINUTES_FOR_RATE = 5.0  # match training pipeline
 PRIOR_AVG_WINDOW = 5       # games for weighting players by minutes
@@ -114,6 +119,61 @@ def _get_player_pm_rate(player_id: str) -> float:
     return sum(rates) / len(rates) if rates else 0.0
 
 
+def _lookup_historical_prior(espn_game_id: str) -> tuple[float | None, float | None]:
+    """Look up stored priors from games_predictions_deploy.csv.
+
+    Returns (prior_home_wp, kalshi_pregame_wp).
+    """
+    if not _PREDICTIONS_FILE.exists():
+        return None, None
+    with open(_PREDICTIONS_FILE) as f:
+        for row in csv.DictReader(f):
+            if row.get("game_id") == espn_game_id:
+                try:
+                    xgb = float(row["prior_home_wp"])
+                except (ValueError, KeyError):
+                    xgb = None
+                try:
+                    kalshi = float(row["kalshi_pregame_wp"])
+                except (ValueError, KeyError):
+                    kalshi = None
+                return xgb, kalshi
+    return None, None
+
+
+def _load_historical_roster(espn_game_id: str, away_team: str, home_team: str) -> dict | None:
+    """Load roster from nba/data/game_rosters/ for a historical game.
+
+    Returns dict matching fetch_roster format: {"home": [...], "away": [...]}
+    where each player is {"id": str, "name": str, "position": str, "jersey": str}.
+    """
+    # Search across year subdirectories for the matching file
+    for year_dir in sorted(_GAME_ROSTERS_DIR.iterdir(), reverse=True):
+        if not year_dir.is_dir():
+            continue
+        # Filename pattern: {game_id}_{away}_{home}.csv
+        for f in year_dir.iterdir():
+            if f.name.startswith(espn_game_id) and f.suffix == ".csv":
+                result = {"home": [], "away": []}
+                with open(f) as fh:
+                    for row in csv.DictReader(fh):
+                        if row.get("did_not_play", "").upper() == "TRUE":
+                            continue
+                        side = row.get("home_away", "")
+                        if side not in ("home", "away"):
+                            continue
+                        result[side].append({
+                            "id": row.get("athlete_id", ""),
+                            "name": row.get("athlete_display_name", ""),
+                            "position": row.get("athlete_position_abbreviation", ""),
+                            "jersey": row.get("athlete_jersey", ""),
+                        })
+                logger.info(f"Loaded historical roster from {f.name}: "
+                           f"home={len(result['home'])}, away={len(result['away'])}")
+                return result
+    return None
+
+
 class NbaEngine:
     """One engine instance per game. Holds roster, quality lookup, prior, and live inference."""
 
@@ -128,8 +188,11 @@ class NbaEngine:
         self.home_quality: float = 0.0
         self.away_quality: float = 0.0
         self.roster_quality_diff: float = 0.0
-        # Prior model prediction
-        self.prior_home_wp: float | None = None
+        # Prior model predictions
+        self.prior_home_wp: float | None = None      # XGBoost pre-game
+        self.kalshi_pregame_wp: float | None = None   # Kalshi pre-game market price
+        # Last model features (for GUI display)
+        self.last_model_features: dict | None = None
         # Pre-game features (computed once, reused every snapshot)
         self.rest_diff: float = 0.0
         self.win_pct_diff: float = 0.0
@@ -146,9 +209,13 @@ class NbaEngine:
             self.away_team = parsed["away"]
             self.home_team = parsed["home"]
 
-        # Fetch roster from ESPN
+        # Fetch roster — historical from game_rosters in sim mode, ESPN live otherwise
         espn_id = lookup_espn_game_id(self.game_id)
-        if espn_id:
+        if settings.sim_mode and espn_id:
+            self.roster = _load_historical_roster(espn_id, self.away_team, self.home_team)
+            if not self.roster:
+                logger.warning(f"No historical roster found for {espn_id}, falling back to ESPN")
+        if not self.roster and espn_id:
             try:
                 self.roster = await fetch_roster(
                     espn_id,
@@ -159,8 +226,10 @@ class NbaEngine:
                 logger.warning(f"Failed to fetch roster from ESPN: {e}")
 
         self._build_quality_lookup()
+        self._restore_persisted_priors()
         self._compute_prior()
         self._compute_pregame_features()
+        self._persist_priors()
 
         self.is_live = True
         logger.info(
@@ -241,7 +310,23 @@ class NbaEngine:
         )
 
     def _compute_prior(self):
-        """Run the prior XGBoost model to get P(home_win)."""
+        """Get P(home_win) — from stored predictions in sim mode, XGBoost live otherwise."""
+        # In sim mode, use the stored historical priors if available
+        if settings.sim_mode:
+            espn_id = lookup_espn_game_id(self.game_id)
+            if espn_id:
+                xgb_prior, kalshi_prior = _lookup_historical_prior(espn_id)
+                if xgb_prior is not None:
+                    self.prior_home_wp = xgb_prior
+                    self.kalshi_pregame_wp = kalshi_prior
+                    logger.info(
+                        f"Prior (historical): XGBoost={self.prior_home_wp:.4f}"
+                        f"{f' Kalshi={self.kalshi_pregame_wp:.4f}' if self.kalshi_pregame_wp else ''}"
+                    )
+                    return
+                logger.warning(f"No stored prior for {espn_id}, falling back to XGBoost")
+
+        # Live mode or fallback: run XGBoost
         try:
             home_roster = self.roster.get("home", []) if self.roster else []
             away_roster = self.roster.get("away", []) if self.roster else []
@@ -279,15 +364,58 @@ class NbaEngine:
         except Exception:
             self.rest_diff = 0.0
 
+    def _restore_persisted_priors(self):
+        """Restore priors from persisted game state if available.
+
+        Called before _compute_prior so that persisted values are used as
+        defaults — _compute_prior can still overwrite them.
+        """
+        state = load_game(self.game_id)
+        restored = False
+        if state.get("_prior_home_wp") is not None and self.prior_home_wp is None:
+            self.prior_home_wp = state["_prior_home_wp"]
+            restored = True
+        if state.get("_kalshi_pregame_wp") is not None and self.kalshi_pregame_wp is None:
+            self.kalshi_pregame_wp = state["_kalshi_pregame_wp"]
+            restored = True
+        if restored:
+            logger.info(
+                f"[{self.game_id}] Restored persisted priors: "
+                f"xgb={self.prior_home_wp} kalshi_pre={self.kalshi_pregame_wp}"
+            )
+
+    def _persist_priors(self):
+        """Save priors to the game state JSON so they survive restarts."""
+        state = load_game(self.game_id)
+        changed = False
+        if self.prior_home_wp is not None and state.get("_prior_home_wp") != self.prior_home_wp:
+            state["_prior_home_wp"] = self.prior_home_wp
+            changed = True
+        if self.kalshi_pregame_wp is not None and state.get("_kalshi_pregame_wp") != self.kalshi_pregame_wp:
+            state["_kalshi_pregame_wp"] = self.kalshi_pregame_wp
+            changed = True
+        if changed:
+            save_game(state)
+            logger.info(f"[{self.game_id}] Persisted priors to disk")
+
     def on_snapshot(self, snapshot: dict) -> dict:
-        """Process a live snapshot: run GAM inference, return enriched state.
+        """Process a live snapshot: run dual-prior GAM inference, cancel-and-requote.
 
         Called on every snapshot received from the iOS client.
-        Returns the snapshot dict with `home_wp` and `model` metadata attached.
+        Returns the snapshot dict with model and trader metadata attached.
         """
         if not self.is_live or self.prior_home_wp is None:
             return snapshot
 
+        # ── Handle delta reset (after seek/skip in sim replay) ──
+        if snapshot.get("delta_reset"):
+            self.trader.prev_p_kalshi = None
+            self.trader.last_model_delta = None
+            self.trader.last_expected_move = None
+            self.trader.last_direction = None
+            logger.info(f"[{self.game_id}] Delta baseline reset (seek)")
+
+        # ── Computed posterior (XGBoost prior) — always run for display ──
         try:
             self.home_wp = live_inference.predict_home_wp(
                 snapshot=snapshot,
@@ -299,62 +427,141 @@ class NbaEngine:
                 away_team=self.away_team,
             )
             self.snapshot_count += 1
-
-            if self.snapshot_count % 10 == 1:
-                score = f"{snapshot.get('home', {}).get('score', 0)}-{snapshot.get('away', {}).get('score', 0)}"
-                logger.info(
-                    f"[{self.game_id}] snapshot #{self.snapshot_count} | "
-                    f"score={score} | home_wp={self.home_wp:.4f}"
-                )
         except Exception as e:
-            logger.error(f"GAM inference failed: {e}")
+            logger.error(f"GAM inference (computed prior) failed: {e}")
 
-        # Enrich the snapshot
+        # ── Kalshi posterior (market-price prior) — only if we have market data ──
+        p_kalshi = None
+        market_mid = None
+        bid = self.trader.home_best_bid
+        ask = self.trader.home_best_ask
+        if bid is not None and ask is not None:
+            market_mid = (bid + ask) / 2.0
+            market_prob = max(0.01, min(0.99, market_mid / 100.0))
+            try:
+                p_kalshi = live_inference.predict_home_wp(
+                    snapshot=snapshot,
+                    prior_home_wp=market_prob,
+                    rest_diff=self.rest_diff,
+                    roster_quality_diff=self.roster_quality_diff,
+                    win_pct_diff=self.win_pct_diff,
+                    home_team=self.home_team,
+                    away_team=self.away_team,
+                )
+            except Exception as e:
+                logger.error(f"GAM inference (Kalshi prior) failed: {e}")
+
+        if self.snapshot_count % 10 == 1:
+            score = f"{snapshot.get('home', {}).get('score', 0)}-{snapshot.get('away', {}).get('score', 0)}"
+            logger.info(
+                f"[{self.game_id}] snapshot #{self.snapshot_count} | "
+                f"score={score} | p_computed={self.home_wp:.4f}"
+                f"{f' | p_kalshi={p_kalshi:.4f}' if p_kalshi is not None else ''}"
+                f"{f' | mid={market_mid:.0f}' if market_mid is not None else ''}"
+            )
+
+        # ── Enrich snapshot ──
         enriched = dict(snapshot)
         enriched["home_wp"] = round(self.home_wp, 4) if self.home_wp is not None else None
         enriched["prior_home_wp"] = round(self.prior_home_wp, 4)
 
-        # Debug: include raw feature info in broadcast for frontend debugging
+        # ── Attach model features for GUI display ──
+        try:
+            _feats = live_inference.snapshot_to_features(
+                snapshot, self.prior_home_wp,
+                rest_diff=self.rest_diff,
+                roster_quality_diff=self.roster_quality_diff,
+                win_pct_diff=self.win_pct_diff,
+                home_team=self.home_team,
+                away_team=self.away_team,
+            )
+            # Round for display, drop internal keys
+            self.last_model_features = {
+                k: round(v, 4) if isinstance(v, float) else v
+                for k, v in _feats.items() if not k.startswith("_")
+            }
+            enriched["model_features"] = self.last_model_features
+        except Exception:
+            enriched["model_features"] = None
+        enriched["kalshi_pregame_wp"] = round(self.kalshi_pregame_wp, 4) if self.kalshi_pregame_wp is not None else None
+        enriched["p_kalshi"] = round(p_kalshi, 4) if p_kalshi is not None else None
+
         home_score = snapshot.get("home", {}).get("score", 0)
         away_score = snapshot.get("away", {}).get("score", 0)
         enriched["_debug"] = {
             "engine_home_team": self.home_team,
             "engine_away_team": self.away_team,
-            "snapshot_home_team": snapshot.get("home_team"),
-            "snapshot_away_team": snapshot.get("away_team"),
             "home_score": home_score,
             "away_score": away_score,
             "score_diff": home_score - away_score,
             "prior_home_wp": round(self.prior_home_wp, 4) if self.prior_home_wp else None,
             "home_wp": round(self.home_wp, 4) if self.home_wp else None,
+            "p_kalshi": round(p_kalshi, 4) if p_kalshi is not None else None,
+            "market_mid": market_mid,
         }
 
-        # Run trading evaluation only when wp changes enough and trading is enabled
-        if (self.home_wp is not None
-                and self.trader.params.enabled
-                and self.trader.should_evaluate(self.home_wp)):
-            logger.debug(
-                f"[{self.game_id}] wp changed: "
-                f"{self.trader.last_evaluated_wp} -> {self.home_wp:.4f}, evaluating trade"
-            )
-            self.trader.last_evaluated_wp = self.home_wp
-            trade_result = evaluate_and_trade(self.trader, self.home_wp)
-            if trade_result:
-                enriched["last_trade"] = trade_result
+        # ── Always store posteriors on trader for dashboard display ──
+        if p_kalshi is not None:
+            self.trader.last_p_kalshi = p_kalshi
+        if self.home_wp is not None:
+            self.trader.last_p_computed = self.home_wp
+        if p_kalshi is not None and market_mid is not None:
+            self.trader.last_theo = round(p_kalshi * 100)
+
+        # ── Delta-based trading ──
+        if (p_kalshi is not None
+                and self.home_wp is not None
+                and market_mid is not None):
+
+            # Compute model delta (change in Kalshi posterior since last snapshot)
+            prev = self.trader.prev_p_kalshi
+            if prev is not None:
+                model_delta = p_kalshi - prev
+                self.trader.last_model_delta = model_delta
+                # kalshi_pre = current market mid (market hasn't repriced yet)
+                kalshi_pre = market_mid
+
+                if self.trader.params.enabled:
+                    trade_result = cancel_and_requote(
+                        self.trader, p_kalshi, self.home_wp,
+                        model_delta, kalshi_pre,
+                    )
+                    if trade_result:
+                        enriched["last_trade"] = trade_result
+                else:
+                    # Not trading, but still track delta for display
+                    expected_move = model_delta * self.trader.params.delta_scale
+                    self.trader.last_expected_move = expected_move
+                    self.trader.last_fair = kalshi_pre + expected_move * 100
+                    self.trader.last_direction = (
+                        "BUY" if model_delta > self.trader.params.min_delta
+                        else "SELL" if model_delta < -self.trader.params.min_delta
+                        else "SKIP"
+                    )
+
+            # Store current p_kalshi as prev for next snapshot
+            self.trader.prev_p_kalshi = p_kalshi
 
         enriched["trader"] = self.trader.to_dict()
         return enriched
 
-    def on_orderbook_update(self, ticker: str, best_ask: Optional[int]):
-        """Update best ask price from orderbook delta. Called by WS proxy."""
+    def on_orderbook_update(self, ticker: str, best_bid: Optional[int], best_ask: Optional[int]):
+        """Update best bid/ask prices from orderbook snapshot. Called by WS proxy."""
         if ticker == self.trader.home_ticker:
+            self.trader.home_best_bid = best_bid
             self.trader.home_best_ask = best_ask
+            # Capture first home orderbook mid as Kalshi pre-game prior (live mode)
+            if self.kalshi_pregame_wp is None and best_bid is not None and best_ask is not None:
+                self.kalshi_pregame_wp = (best_bid + best_ask) / 200.0
+                logger.info(f"[{self.game_id}] Kalshi pre-game prior captured: {self.kalshi_pregame_wp:.4f}")
+                self._persist_priors()
         elif ticker == self.trader.away_ticker:
+            self.trader.away_best_bid = best_bid
             self.trader.away_best_ask = best_ask
 
     def on_fill(self, fill: dict):
         """Process a fill notification. Position is recomputed from cache on next trade eval."""
-        pass  # fills_cache already persists it; position recomputed in evaluate_and_trade
+        pass  # fills_cache already persists it; position recomputed in cancel_and_requote
 
     def set_market_tickers(self, home_ticker: str, away_ticker: str):
         """Set the Kalshi market tickers for home/away YES contracts."""
@@ -382,8 +589,10 @@ class NbaEngine:
             "home_quality": round(self.home_quality, 4),
             "away_quality": round(self.away_quality, 4),
             "prior_home_wp": round(self.prior_home_wp, 4) if self.prior_home_wp is not None else None,
+            "kalshi_pregame_wp": round(self.kalshi_pregame_wp, 4) if self.kalshi_pregame_wp is not None else None,
             "home_wp": round(self.home_wp, 4) if self.home_wp is not None else None,
             "snapshot_count": self.snapshot_count,
+            "model_features": self.last_model_features,
             "trader": self.trader.to_dict(),
         }
 

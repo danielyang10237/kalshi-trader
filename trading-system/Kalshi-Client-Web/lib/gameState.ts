@@ -198,7 +198,7 @@ export class GameStateManager {
     const prev = [...this.events].reverse().find((e) => e.type !== 'time_range');
     this.lastAction = prev ? `Undo → ${prev.detail ?? prev.type}` : '';
     this.snapshotTimestamp = Date.now() / 1000;
-    this.sendSnapshot();
+    this.sendSnapshot(true);
     this.persistLocally();
     this.notify();
   }
@@ -225,7 +225,7 @@ export class GameStateManager {
     const prev = [...this.events].reverse().find((e) => e.type !== 'time_range');
     this.lastAction = prev ? `Undo → ${prev.detail ?? prev.type}` : '';
     this.snapshotTimestamp = Date.now() / 1000;
-    this.sendSnapshot();
+    this.sendSnapshot(true);
     this.persistLocally();
     this.notify();
   }
@@ -373,8 +373,11 @@ export class GameStateManager {
     };
   }
 
-  sendSnapshot() {
+  sendSnapshot(deltaReset: boolean = false) {
     const snapshot = this.buildSnapshot();
+    if (deltaReset) {
+      snapshot.delta_reset = true;
+    }
     this.sendJSON(snapshot);
   }
 

@@ -49,35 +49,74 @@ async def ws_orderbook(ws: WebSocket, market_ticker: str):
     stream = kalshi.stream.orderbook(market_ticker)
     stream_task = asyncio.create_task(stream.run_forever())
 
+    # Local orderbook state: apply snapshots + deltas incrementally
+    # yes_book: {price_cents: size} — YES bids
+    # no_book: {price_cents: size} — NO bids (asks in NO-price space)
+    yes_book: dict[int, float] = {}
+    no_book: dict[int, float] = {}
+
+    def _parse_price(raw) -> int:
+        p = float(raw) if isinstance(raw, str) else raw
+        if isinstance(raw, str) and p < 1.0:
+            p = round(p * 100)
+        return int(p) if p else 0
+
+    def _parse_size(raw) -> float:
+        return float(raw) if isinstance(raw, str) else raw
+
+    def _update_engines():
+        best_bid = max(yes_book.keys()) if yes_book else None
+        best_ask = (100 - max(no_book.keys())) if no_book else None
+        if best_bid is not None or best_ask is not None:
+            for engine in _engines.values():
+                engine.on_orderbook_update(market_ticker, best_bid, best_ask)
+
     async def forward_messages():
+        nonlocal yes_book, no_book
         try:
             while True:
                 msg = await stream.out_queue.get()
-                print(f"[ws_orderbook] RAW msg (first 200): {msg[:200]}")
-                # Feed best ask to any engine tracking this ticker
                 try:
                     parsed = json.loads(msg)
                     inner = json.loads(parsed) if isinstance(parsed, str) else parsed
-                    # Extract best ask from orderbook snapshot/delta
-                    msg_data = inner.get("msg", {}) if isinstance(inner, dict) else {}
-                    # Support both old (yes/no) and new (yes_dollars_fp/no_dollars_fp) formats
-                    asks = msg_data.get("yes", []) or msg_data.get("yes_dollars_fp", [])
-                    # Find best (lowest) ask
-                    best_ask = None
-                    if asks and isinstance(asks, list):
-                        for level in asks:
-                            if isinstance(level, list) and len(level) >= 1:
-                                price = float(level[0]) if isinstance(level[0], str) else level[0]
-                                # Convert dollars to cents if needed
-                                if isinstance(level[0], str) and price < 1.0:
-                                    price = round(price * 100)
+                    if not isinstance(inner, dict):
+                        pass
+                    elif inner.get("type") == "orderbook_snapshot":
+                        msg_data = inner.get("msg", {})
+                        # Full reset from snapshot
+                        yes_book.clear()
+                        no_book.clear()
+                        for level in (msg_data.get("yes", []) or msg_data.get("yes_dollars_fp", [])):
+                            if isinstance(level, list) and len(level) >= 2:
+                                p = _parse_price(level[0])
+                                s = _parse_size(level[1])
+                                if p and s > 0:
+                                    yes_book[p] = s
+                        for level in (msg_data.get("no", []) or msg_data.get("no_dollars_fp", [])):
+                            if isinstance(level, list) and len(level) >= 2:
+                                p = _parse_price(level[0])
+                                s = _parse_size(level[1])
+                                if p and s > 0:
+                                    no_book[p] = s
+                        _update_engines()
+
+                    elif inner.get("type") == "orderbook_delta":
+                        msg_data = inner.get("msg", {})
+                        side = msg_data.get("side", "")
+                        price_raw = msg_data.get("price_dollars") or msg_data.get("price")
+                        delta_raw = msg_data.get("delta_fp") or msg_data.get("delta")
+                        if side and price_raw is not None and delta_raw is not None:
+                            price = _parse_price(price_raw)
+                            delta = _parse_size(delta_raw)
+                            book = yes_book if side == "yes" else no_book
+                            current = book.get(price, 0)
+                            new_size = current + delta
+                            if new_size <= 0:
+                                book.pop(price, None)
                             else:
-                                price = level.get("price", 0)
-                            if price and (best_ask is None or price < best_ask):
-                                best_ask = price
-                    if best_ask is not None:
-                        for engine in _engines.values():
-                            engine.on_orderbook_update(market_ticker, best_ask)
+                                book[price] = new_size
+                            _update_engines()
+
                 except Exception:
                     pass
                 await ws.send_text(msg)
@@ -113,7 +152,6 @@ async def ws_trades(ws: WebSocket, market_ticker: str):
         try:
             while True:
                 msg = await stream.out_queue.get()
-                print(f"[ws_trades] RAW msg (first 200): {msg[:200]}")
                 await ws.send_text(msg)
         except Exception as e:
             print(f"[ws_trades] Error forwarding: {e}")

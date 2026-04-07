@@ -90,9 +90,10 @@ class SimAccount:
             order_dicts.append(self._order_to_dict(o, "resting"))
         return {"orders": order_dicts, "cursor": ""}
 
-    def log_order(self, order: OrderEntry, status: str, fills: list[dict] | None = None):
+    def log_order(self, order: OrderEntry, status: str, fills: list[dict] | None = None,
+                  market_context: dict | None = None):
         """Log an order submission for the trade log."""
-        self.all_orders.append({
+        entry = {
             "order_id": order.order_id,
             "client_order_id": order.client_order_id,
             "ticker": order.ticker,
@@ -106,7 +107,10 @@ class SimAccount:
             "is_mm": order.is_mm,
             "created_at": order.created_at,
             "fills": fills or [],
-        })
+        }
+        if market_context:
+            entry["market"] = market_context
+        self.all_orders.append(entry)
 
     def reset(self):
         """Reset account to initial state."""

@@ -7,7 +7,9 @@
 /nfl/data/
 /nfl/modeling/data/
 /polymarket/data/
-
+/nba/artifacts/
+/nba/outdated/game_predictions_deploy.csv
+/nba/outputs_v3/
 /nba/prior_models/
 /nba/posterior_models/
 # =============================================================================
@@ -49,6 +51,7 @@ trading-system/python_app/nba/posterior_modeling/
 trading-system/python_app/data/nba_roster/
 trading-system/python_app/data/nba_games/
 trading-system/python_app/data/fills.json
+trading-system/python_app/nba/prior_models/
 
 # =============================================================================
 # sim-exchange
@@ -56,6 +59,7 @@ trading-system/python_app/data/fills.json
 sim-exchange/frontend/.next/
 sim-exchange/frontend/next-env.d.ts
 sim-exchange/frontend/*.tsbuildinfo
+sim-exchange/data_cache/
 
 # =============================================================================
 # Dependencies & node

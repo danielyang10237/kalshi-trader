@@ -48,6 +48,8 @@ struct FreeThrowView: View {
             if completed < totalFTs {
                 HStack(spacing: 24) {
                     Button(action: {
+                        if ws.pendingFtSigned > 0 { ws.pendingFtSigned -= 1 }
+                        else if ws.pendingFtSigned < 0 { ws.pendingFtSigned += 1 }
                         ws.pushEvent(GameEvent(
                             type: "ft_made", team: team, quarter: quarter,
                             detail: "\(teamCode) FT Made"
@@ -67,6 +69,8 @@ struct FreeThrowView: View {
                     }
 
                     Button(action: {
+                        if ws.pendingFtSigned > 0 { ws.pendingFtSigned -= 1 }
+                        else if ws.pendingFtSigned < 0 { ws.pendingFtSigned += 1 }
                         ws.pushEvent(GameEvent(
                             type: "ft_miss", team: team, quarter: quarter,
                             detail: "\(teamCode) FT Miss"
@@ -91,6 +95,8 @@ struct FreeThrowView: View {
 
             Button(action: {
                 // Undo all FT events we pushed in this sequence
+                ws.pendingFtSigned = 0
+                ws.isDeadBall = false
                 ws.undoLastN(ftEventCount)
                 onDone(false)
             }) {

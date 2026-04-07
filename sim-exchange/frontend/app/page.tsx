@@ -7,6 +7,7 @@ import SimTradeLog from "@/components/SimTradeLog";
 import SimAccountPanel from "@/components/SimAccountPanel";
 import SimReplayPanel from "@/components/SimReplayPanel";
 import SimGameFeed from "@/components/SimGameFeed";
+import SimFeederToggle from "@/components/SimFeederToggle";
 import {
   checkHealth,
   getConfig,
@@ -175,6 +176,7 @@ export default function SimulatorPage() {
           )}
           <SimControls />
           <SimReplayPanel />
+          <SimFeederToggle />
         </div>
 
         {/* Right: Trade Log + Account */}

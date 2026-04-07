@@ -29,6 +29,12 @@ struct GameDashboardView: View {
     @State private var reboundGroupId: String = ""
     @State private var reboundMissTeam: String = "home"  // team that missed
 
+    // Trading params overlay
+    @State private var showTradingParams = false
+
+    // Timer-during-FTs state
+    @State private var timerWasRunning = false
+
     // Timeout state
     @State private var showTimeout = false
     @State private var timeoutTeam: String = "home"
@@ -99,11 +105,16 @@ struct GameDashboardView: View {
                         quarter: ws.quarter,
                         onDone: { lastFTMissed in
                             showFreeThrows = false
+                            ws.pendingFtSigned = 0
+                            ws.isDeadBall = false
                             if lastFTMissed {
+                                // Last FT missed → live ball, auto-resume clock
+                                if timerWasRunning { ws.startGameTimer() }
                                 reboundMissTeam = ftTeam
                                 reboundGroupId = ws.events.last?.groupId ?? UUID().uuidString
                                 showReboundPrompt = true
                             } else {
+                                // Last FT made → clock stays stopped, manual play required
                                 ws.pushEvent(makeEvent(type: "possession", team: ftTeam == "home" ? "away" : "home",
                                                        detail: "\(ftTeam == "home" ? awayTeam : homeTeam) Ball"))
                             }
@@ -341,6 +352,13 @@ struct GameDashboardView: View {
                     .frame(maxHeight: .infinity)
                     .background(cardBg)
                     .cornerRadius(12)
+
+                    // Trading settings
+                    tradingBlock()
+                        .padding(6)
+                        .frame(maxHeight: .infinity)
+                        .background(cardBg)
+                        .cornerRadius(12)
                 }
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -362,11 +380,13 @@ struct GameDashboardView: View {
                     HStack(spacing: 10) {
                         squareShotBtn("+2", subtitle: "Made", color: teamColor) {
                             let gid = UUID().uuidString
+                            ws.isDeadBall = true
                             ws.pushEvent(makeEvent(type: "fg_made", team: side, value: 2, detail: "\(teamCode) +2 Made", groupId: gid))
                             switchPossession(groupId: gid)
                         }
                         squareShotBtn("+2", subtitle: "Miss", color: .gray) {
                             let gid = UUID().uuidString
+                            ws.isDeadBall = false
                             ws.pushEvent(makeEvent(type: "fg_miss", team: side, value: 2, detail: "\(teamCode) +2 Miss", groupId: gid))
                             reboundGroupId = gid
                             reboundMissTeam = side
@@ -379,11 +399,13 @@ struct GameDashboardView: View {
                     HStack(spacing: 10) {
                         squareShotBtn("+3", subtitle: "Made", color: teamColor) {
                             let gid = UUID().uuidString
+                            ws.isDeadBall = true
                             ws.pushEvent(makeEvent(type: "fg_made", team: side, value: 3, detail: "\(teamCode) +3 Made", groupId: gid))
                             switchPossession(groupId: gid)
                         }
                         squareShotBtn("+3", subtitle: "Miss", color: .gray) {
                             let gid = UUID().uuidString
+                            ws.isDeadBall = false
                             ws.pushEvent(makeEvent(type: "fg_miss", team: side, value: 3, detail: "\(teamCode) +3 Miss", groupId: gid))
                             reboundGroupId = gid
                             reboundMissTeam = side
@@ -399,28 +421,45 @@ struct GameDashboardView: View {
                 HStack(spacing: 24) {
                     foulBtn("And1\n2pt", color: .green) {
                         let gid = UUID().uuidString
+                        ws.isDeadBall = true
+                        ws.pendingFtSigned = (side == "home" ? 1 : -1) * 1
                         ws.pushEvent(makeEvent(type: "fg_made", team: side, value: 2, detail: "\(teamCode) And1 2pt", groupId: gid))
                         ws.pushEvent(makeEvent(type: "foul", team: otherSide, detail: "\(otherTeamCode) Foul", groupId: gid))
+                        timerWasRunning = ws.timerRunning
+                        if ws.timerRunning { ws.stopGameTimer() }
                         ftTeam = side; ftCount = 1; showFreeThrows = true
                     }
                     foulBtn("Foul\n2pt", color: .orange) {
                         let gid = UUID().uuidString
+                        ws.isDeadBall = true
+                        ws.pendingFtSigned = (side == "home" ? 1 : -1) * 2
                         ws.pushEvent(makeEvent(type: "foul", team: otherSide, detail: "\(otherTeamCode) Foul 2pt", groupId: gid))
+                        timerWasRunning = ws.timerRunning
+                        if ws.timerRunning { ws.stopGameTimer() }
                         ftTeam = side; ftCount = 2; showFreeThrows = true
                     }
                     foulBtn("And1\n3pt", color: .green) {
                         let gid = UUID().uuidString
+                        ws.isDeadBall = true
+                        ws.pendingFtSigned = (side == "home" ? 1 : -1) * 1
                         ws.pushEvent(makeEvent(type: "fg_made", team: side, value: 3, detail: "\(teamCode) And1 3pt", groupId: gid))
                         ws.pushEvent(makeEvent(type: "foul", team: otherSide, detail: "\(otherTeamCode) Foul", groupId: gid))
+                        timerWasRunning = ws.timerRunning
+                        if ws.timerRunning { ws.stopGameTimer() }
                         ftTeam = side; ftCount = 1; showFreeThrows = true
                     }
                     foulBtn("Foul\n3pt", color: .orange) {
                         let gid = UUID().uuidString
+                        ws.isDeadBall = true
+                        ws.pendingFtSigned = (side == "home" ? 1 : -1) * 3
                         ws.pushEvent(makeEvent(type: "foul", team: otherSide, detail: "\(otherTeamCode) Foul 3pt", groupId: gid))
+                        timerWasRunning = ws.timerRunning
+                        if ws.timerRunning { ws.stopGameTimer() }
                         ftTeam = side; ftCount = 3; showFreeThrows = true
                     }
                     foulBtn("Off\nFoul", color: .red) {
                         let gid = UUID().uuidString
+                        ws.isDeadBall = true
                         ws.pushEvent(makeEvent(type: "off_foul", team: side, detail: "\(teamCode) Off Foul", groupId: gid))
                         switchPossession(groupId: gid)
                     }
@@ -453,6 +492,9 @@ struct GameDashboardView: View {
                 if showStatsEditor {
                     statsEditorOverlay()
                 }
+                if showTradingParams {
+                    tradingParamsOverlay()
+                }
             }
         )
     }
@@ -465,7 +507,7 @@ struct GameDashboardView: View {
             Spacer()
 
             // Switch possession
-            Button(action: { switchPossession() }) {
+            Button(action: { ws.isDeadBall = false; switchPossession() }) {
                 VStack(spacing: 4) {
                     Image(systemName: "arrow.left.arrow.right.circle.fill")
                         .font(.system(size: 28))
@@ -481,6 +523,7 @@ struct GameDashboardView: View {
             // Steal
             Button(action: {
                 let gid = UUID().uuidString
+                ws.isDeadBall = false
                 ws.pushEvent(makeEvent(type: "steal", team: otherSide, detail: "\(otherTeamCode) Steal", groupId: gid))
                 ws.pushEvent(makeEvent(type: "turnover", team: side, detail: "\(teamCode) TOV", groupId: gid))
                 switchPossession(groupId: gid)
@@ -500,6 +543,7 @@ struct GameDashboardView: View {
             // Turnover
             Button(action: {
                 let gid = UUID().uuidString
+                ws.isDeadBall = false
                 ws.pushEvent(makeEvent(type: "turnover", team: side, detail: "\(teamCode) TOV", groupId: gid))
                 switchPossession(groupId: gid)
             }) {
@@ -741,6 +785,7 @@ struct GameDashboardView: View {
         timeoutSeconds = 75
         showTimeout = true
         timeoutRunning = true
+        ws.isDeadBall = true
         timeoutTask = Task {
             while !Task.isCancelled && timeoutSeconds > 0 {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -756,6 +801,7 @@ struct GameDashboardView: View {
         timeoutTask = nil
         timeoutRunning = false
         showTimeout = false
+        ws.isDeadBall = false
     }
 
     private func endTimeout() {
@@ -763,6 +809,7 @@ struct GameDashboardView: View {
         timeoutTask = nil
         timeoutRunning = false
         showTimeout = false
+        ws.isDeadBall = false
         let code = timeoutTeam == "home" ? homeTeam : awayTeam
         ws.pushEvent(makeEvent(type: "timeout", team: timeoutTeam, detail: "\(code) Timeout"))
     }
@@ -899,6 +946,291 @@ struct GameDashboardView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Trading Block
+
+    private var pnlDisplay: String {
+        guard let cents = ws.pnlCents else { return "—" }
+        let dollars = Double(cents) / 100.0
+        return String(format: "%@$%.2f", dollars >= 0 ? "+" : "-", abs(dollars))
+    }
+
+    private var pnlColor: Color {
+        guard let cents = ws.pnlCents else { return .secondary }
+        return cents >= 0 ? .green : .red
+    }
+
+    private var exposureDisplay: String {
+        let dollars = Double(ws.totalExposureCents) / 100.0
+        return String(format: "$%.2f", dollars)
+    }
+
+    @ViewBuilder
+    private func tradingBlock() -> some View {
+        VStack(spacing: 6) {
+            // Header with gear icon
+            HStack(spacing: 4) {
+                Text("Trading")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.yellow)
+                Spacer()
+                Button(action: { showTradingParams = true }) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 14))
+                        .foregroundColor(.yellow.opacity(0.7))
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Enable toggle
+            HStack(spacing: 6) {
+                Text("Enabled")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(action: { ws.toggleTrading() }) {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(ws.tradingEnabled ? Color.yellow : Color.gray.opacity(0.4))
+                        .frame(width: 34, height: 18)
+                        .overlay(
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 14, height: 14)
+                                .offset(x: ws.tradingEnabled ? 7 : -7),
+                            alignment: .center
+                        )
+                        .animation(.easeInOut(duration: 0.15), value: ws.tradingEnabled)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // P&L + Exposure column
+            VStack(spacing: 4) {
+                HStack(spacing: 4) {
+                    Text("P&L")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(pnlDisplay)
+                        .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                        .foregroundColor(pnlColor)
+                }
+                HStack(spacing: 4) {
+                    Text("Exposure")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(exposureDisplay)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(6)
+            .background(Color.gray.opacity(0.15))
+            .cornerRadius(6)
+
+            // Position
+            if ws.homePosition != 0 {
+                HStack(spacing: 4) {
+                    Text("Pos")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("\(ws.homePosition > 0 ? "+" : "")\(ws.homePosition)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(ws.homePosition > 0 ? .green : .red)
+                }
+            }
+
+            if !ws.engineLive {
+                Text("Engine offline")
+                    .font(.system(size: 8))
+                    .foregroundColor(.gray)
+            }
+        }
+        .frame(width: 110)
+    }
+
+    // MARK: - Trading Params Editor
+
+    @ViewBuilder
+    private func tradingParamsOverlay() -> some View {
+        ZStack {
+            Color.black.opacity(0.5).ignoresSafeArea()
+                .onTapGesture { showTradingParams = false }
+
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Trading Parameters")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.yellow)
+                    Spacer()
+                    Button(action: { showTradingParams = false }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                tradingParamRow("Min Size", key: "min_size", value: ws.tradingParams.minSize, suffix: "ct")
+                tradingParamRow("Max Size", key: "max_size", value: ws.tradingParams.maxSize, suffix: "ct")
+                tradingParamRow("Max Position", key: "max_position", value: ws.tradingParams.maxPosition, suffix: "ct")
+                tradingParamRowDollars("Max Exposure", key: "max_exposure", cents: ws.tradingParams.maxExposure)
+                tradingParamRowDouble("Delta Scale", key: "delta_scale", value: ws.tradingParams.deltaScale, step: 0.1)
+                tradingParamRowDouble("Min Delta", key: "min_delta", value: ws.tradingParams.minDelta, step: 0.005)
+                tradingParamRowDouble("Full Scale", key: "delta_full_scale", value: ws.tradingParams.deltaFullScale, step: 0.01)
+                tradingParamRow("Aggression", key: "aggression", value: ws.tradingParams.aggression, suffix: "\u{00A2}")
+            }
+            .padding(20)
+            .background(Color(.systemBackground))
+            .cornerRadius(16)
+            .shadow(radius: 20)
+            .frame(maxWidth: 320)
+        }
+    }
+
+    @ViewBuilder
+    private func tradingParamRow(_ label: String, key: String, value: Int, suffix: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 100, alignment: .leading)
+
+            Button(action: {
+                let newVal = max(0, value - 1)
+                ws.tradingParams.update(key: key, intValue: newVal)
+                ws.updateTradingParam(key: key, value: newVal)
+            }) {
+                Image(systemName: "minus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.red.opacity(0.7))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text("\(value)")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .frame(width: 50)
+                .multilineTextAlignment(.center)
+
+            Button(action: {
+                let newVal = value + 1
+                ws.tradingParams.update(key: key, intValue: newVal)
+                ws.updateTradingParam(key: key, value: newVal)
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.yellow.opacity(0.8))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text(suffix)
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .frame(width: 16, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func tradingParamRowDollars(_ label: String, key: String, cents: Int) -> some View {
+        let dollars = cents / 100
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 100, alignment: .leading)
+
+            Button(action: {
+                let newCents = max(0, cents - 10000)
+                ws.tradingParams.maxExposure = newCents
+                ws.updateTradingParam(key: key, value: newCents)
+            }) {
+                Image(systemName: "minus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.red.opacity(0.7))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text("$\(dollars)")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .frame(width: 50)
+                .multilineTextAlignment(.center)
+
+            Button(action: {
+                let newCents = cents + 10000
+                ws.tradingParams.maxExposure = newCents
+                ws.updateTradingParam(key: key, value: newCents)
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.yellow.opacity(0.8))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text("$")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .frame(width: 16, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func tradingParamRowDouble(_ label: String, key: String, value: Double, step: Double) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 100, alignment: .leading)
+
+            Button(action: {
+                let newVal = max(0, value - step)
+                ws.tradingParams.update(key: key, doubleValue: newVal)
+                ws.updateTradingParam(key: key, value: newVal)
+            }) {
+                Image(systemName: "minus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.red.opacity(0.7))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text(String(format: "%.3f", value))
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .frame(width: 50)
+                .multilineTextAlignment(.center)
+
+            Button(action: {
+                let newVal = value + step
+                ws.tradingParams.update(key: key, doubleValue: newVal)
+                ws.updateTradingParam(key: key, value: newVal)
+            }) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(Color.yellow.opacity(0.8))
+                    .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+
+            Text("")
+                .frame(width: 16)
         }
     }
 

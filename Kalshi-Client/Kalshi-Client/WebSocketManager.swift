@@ -58,10 +58,43 @@ struct GameSnapshot: Codable {
     var time_range: String
     var timer_seconds: Int
     var stopped: Bool
+    var pending_ft_signed: Int
+    var is_dead_ball: Bool
     var home: TeamStats
     var away: TeamStats
     var events: [GameEvent]
     var last_action: String
+}
+
+struct TradingParamsLocal {
+    var minSize: Int = 5
+    var maxSize: Int = 50
+    var maxPosition: Int = 200
+    var maxExposure: Int = 50000   // cents
+    var deltaScale: Double = 0.6
+    var minDelta: Double = 0.01
+    var deltaFullScale: Double = 0.08
+    var aggression: Int = 1
+
+    mutating func update(key: String, intValue: Int) {
+        switch key {
+        case "min_size": minSize = intValue
+        case "max_size": maxSize = intValue
+        case "max_position": maxPosition = intValue
+        case "max_exposure": maxExposure = intValue
+        case "aggression": aggression = intValue
+        default: break
+        }
+    }
+
+    mutating func update(key: String, doubleValue: Double) {
+        switch key {
+        case "delta_scale": deltaScale = doubleValue
+        case "min_delta": minDelta = doubleValue
+        case "delta_full_scale": deltaFullScale = doubleValue
+        default: break
+        }
+    }
 }
 
 // For decoding server's initial state on connect
@@ -100,6 +133,16 @@ class WebSocketManager: ObservableObject {
     @Published var awayStats: TeamStats = .zero
     @Published var lastAction: String = ""
     @Published var events: [GameEvent] = []
+    @Published var pendingFtSigned: Int = 0
+    @Published var isDeadBall: Bool = false
+
+    // Trading state (from feed WebSocket)
+    @Published var tradingEnabled: Bool = false
+    @Published var homePosition: Int = 0
+    @Published var pnlCents: Int? = nil
+    @Published var totalExposureCents: Int = 0
+    @Published var tradingParams = TradingParamsLocal()
+    @Published var engineLive: Bool = false
 
     var homeScore: Int { homeStats.score }
     var awayScore: Int { awayStats.score }
@@ -109,9 +152,11 @@ class WebSocketManager: ObservableObject {
     let awayTeam: String
 
     private var webSocketTask: URLSessionWebSocketTask?
+    private var feedTask: URLSessionWebSocketTask?
     private var isSetup: Bool
     private var timerTask: Task<Void, Never>?
     private var snapshotTimestamp: Double = 0
+    private let baseURL = "https://palisadescapital.co"
 
     // Persistence key
     private var persistKey: String { "game_events_\(gameId)" }
@@ -135,6 +180,7 @@ class WebSocketManager: ObservableObject {
         webSocketTask?.resume()
         isConnected = true
         listen()
+        connectFeed()
 
         if !isSetup {
             sendSetup()
@@ -144,6 +190,8 @@ class WebSocketManager: ObservableObject {
     func disconnect() {
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         webSocketTask = nil
+        feedTask?.cancel(with: .goingAway, reason: nil)
+        feedTask = nil
         isConnected = false
         stopGameTimer()
     }
@@ -181,7 +229,7 @@ class WebSocketManager: ObservableObject {
             lastAction = ""
         }
         snapshotTimestamp = Date().timeIntervalSince1970
-        sendSnapshot()
+        sendSnapshot(deltaReset: true)
         persistLocally()
     }
 
@@ -198,7 +246,7 @@ class WebSocketManager: ObservableObject {
             lastAction = ""
         }
         snapshotTimestamp = Date().timeIntervalSince1970
-        sendSnapshot()
+        sendSnapshot(deltaReset: true)
         persistLocally()
     }
 
@@ -404,6 +452,8 @@ class WebSocketManager: ObservableObject {
             time_range: timeRange,
             timer_seconds: timerSeconds,
             stopped: isStopped,
+            pending_ft_signed: pendingFtSigned,
+            is_dead_ball: isDeadBall,
             home: homeStats,
             away: awayStats,
             events: events,
@@ -411,11 +461,14 @@ class WebSocketManager: ObservableObject {
         )
     }
 
-    func sendSnapshot() {
+    func sendSnapshot(deltaReset: Bool = false) {
         let snapshot = buildSnapshot()
         guard let data = try? JSONEncoder().encode(snapshot),
               var dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         dict["action"] = "snapshot"
+        if deltaReset {
+            dict["delta_reset"] = true
+        }
         guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
               let str = String(data: jsonData, encoding: .utf8) else { return }
         webSocketTask?.send(.string(str)) { _ in }
@@ -493,6 +546,99 @@ class WebSocketManager: ObservableObject {
             // Local is newer — push our state to server
             sendSnapshot()
         }
+    }
+
+    // MARK: - Feed WebSocket (trading state)
+
+    private func connectFeed() {
+        let urlString = "wss://palisadescapital.co/nba/ws/feed/\(gameId)"
+        guard let url = URL(string: urlString) else { return }
+        feedTask = URLSession(configuration: .default).webSocketTask(with: url)
+        feedTask?.resume()
+        listenFeed()
+    }
+
+    private func listenFeed() {
+        feedTask?.receive { [weak self] result in
+            Task { @MainActor in
+                guard let self = self else { return }
+                switch result {
+                case .success(let message):
+                    switch message {
+                    case .string(let text): self.handleFeedMessage(text)
+                    case .data(let data):
+                        if let text = String(data: data, encoding: .utf8) {
+                            self.handleFeedMessage(text)
+                        }
+                    @unknown default: break
+                    }
+                    self.listenFeed()
+                case .failure(_):
+                    if !self.isStopped {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        self.connectFeed()
+                    }
+                }
+            }
+        }
+    }
+
+    private func handleFeedMessage(_ text: String) {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+
+        // If no trader key, engine is not running
+        guard let trader = json["trader"] as? [String: Any] else {
+            engineLive = false
+            return
+        }
+        engineLive = true
+
+        if let params = trader["params"] as? [String: Any] {
+            tradingEnabled = params["enabled"] as? Bool ?? false
+            tradingParams.minSize = params["min_size"] as? Int ?? tradingParams.minSize
+            tradingParams.maxSize = params["max_size"] as? Int ?? tradingParams.maxSize
+            tradingParams.maxPosition = params["max_position"] as? Int ?? tradingParams.maxPosition
+            tradingParams.maxExposure = params["max_exposure"] as? Int ?? tradingParams.maxExposure
+            tradingParams.deltaScale = params["delta_scale"] as? Double ?? tradingParams.deltaScale
+            tradingParams.minDelta = params["min_delta"] as? Double ?? tradingParams.minDelta
+            tradingParams.deltaFullScale = params["delta_full_scale"] as? Double ?? tradingParams.deltaFullScale
+            tradingParams.aggression = params["aggression"] as? Int ?? tradingParams.aggression
+        }
+
+        let position = trader["home_position"] as? Int ?? 0
+        let cost = trader["home_cost"] as? Int ?? 0
+        let bestBid = trader["home_best_bid"] as? Int
+        homePosition = position
+        totalExposureCents = trader["total_exposure"] as? Int ?? cost
+
+        if position == 0 {
+            pnlCents = -cost
+        } else if let bid = bestBid {
+            pnlCents = -cost + position * bid
+        } else {
+            pnlCents = nil
+        }
+    }
+
+    // MARK: - Trading Controls
+
+    func toggleTrading() {
+        let endpoint = tradingEnabled ? "disable" : "enable"
+        guard let url = URL(string: "\(baseURL)/nba/trading/\(endpoint)/\(gameId)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        tradingEnabled.toggle() // optimistic
+        URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
+    }
+
+    func updateTradingParam(key: String, value: Any) {
+        guard let url = URL(string: "\(baseURL)/nba/trading/params/\(gameId)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [key: value])
+        URLSession.shared.dataTask(with: request) { _, _, _ in }.resume()
     }
 
     // MARK: - Local Persistence

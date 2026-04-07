@@ -9,7 +9,8 @@ import {
   getReplayStatus,
   setReplaySpeed,
   seekReplay,
-  setReplayParams,
+  skipReplay,
+  setPbpOffset,
   type ReplayStatus,
 } from "@/lib/api";
 
@@ -18,30 +19,18 @@ export default function SimReplayPanel() {
   const [status, setStatus] = useState<ReplayStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  // Local state for param sliders (synced from status)
-  const [spread, setSpread] = useState(4);
-  const [levels, setLevels] = useState(5);
-  const [volMult, setVolMult] = useState(1.0);
+  const [pbpOffset, setPbpOffsetLocal] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(refreshStatus, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Sync local sliders from server status on first load
-  useEffect(() => {
-    if (status && spread === 4 && levels === 5 && volMult === 1.0) {
-      setSpread(status.spread);
-      setLevels(status.levels);
-      setVolMult(status.volume_mult);
-    }
-  }, [status?.spread, status?.levels, status?.volume_mult]);
-
   async function refreshStatus() {
     try {
       const s = await getReplayStatus();
       setStatus(s);
+      if (s.pbp_offset_sec !== undefined) setPbpOffsetLocal(s.pbp_offset_sec);
     } catch {}
   }
 
@@ -80,8 +69,9 @@ export default function SimReplayPanel() {
     await refreshStatus();
   }
 
-  async function handleParamChange(params: { spread?: number; levels?: number; volume_mult?: number }) {
-    await setReplayParams(params);
+  async function handlePbpOffset(offset: number) {
+    setPbpOffsetLocal(offset);
+    await setPbpOffset(offset);
   }
 
   return (
@@ -155,6 +145,24 @@ export default function SimReplayPanel() {
           Stop
         </button>
 
+        {/* Skip buttons */}
+        <div className="flex gap-1 ml-2">
+          <button
+            onClick={() => skipReplay(-5).then(() => refreshStatus())}
+            disabled={!status || status.total_events === 0}
+            className="px-2 py-1 text-[10px] bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+          >
+            -5s
+          </button>
+          <button
+            onClick={() => skipReplay(5).then(() => refreshStatus())}
+            disabled={!status || status.total_events === 0}
+            className="px-2 py-1 text-[10px] bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded"
+          >
+            +5s
+          </button>
+        </div>
+
         {/* Speed selector */}
         <div className="flex gap-1 ml-auto">
           {[0.5, 1, 2, 5].map((s) => (
@@ -173,72 +181,22 @@ export default function SimReplayPanel() {
         </div>
       </div>
 
-      {/* Book params */}
-      {status && status.total_events > 0 && (
-        <div className="space-y-2 mb-3 pt-3 border-t border-gray-800">
-          <div className="text-[10px] text-gray-500 uppercase font-semibold">Replay Book Params</div>
-          <div>
-            <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-              <span>Spread</span>
-              <span className="font-mono">{spread}c</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={16}
-              value={spread}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setSpread(v);
-                handleParamChange({ spread: v });
-              }}
-              className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-          </div>
-          <div>
-            <div className="flex justify-between text-xs text-gray-400 mb-0.5">
-              <span>Levels</span>
-              <span className="font-mono">{levels}</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={15}
-              value={levels}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                setLevels(v);
-                handleParamChange({ levels: v });
-              }}
-              className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-          </div>
-          <div>
-            <div className="flex justify-between text-xs text-gray-400 mb-1">
-              <span>Volume</span>
-              <span className="font-mono">{volMult}x</span>
-            </div>
-            <div className="flex gap-1">
-              {[1, 10, 25, 100, 500, 1000, 5000].map((v) => (
-                <button
-                  key={v}
-                  onClick={() => {
-                    setVolMult(v);
-                    handleParamChange({ volume_mult: v });
-                  }}
-                  className={`flex-1 px-1 py-1 text-[10px] rounded ${
-                    volMult === v
-                      ? "bg-blue-600 text-white"
-                      : "bg-gray-700 text-gray-400 hover:bg-gray-600"
-                  }`}
-                >
-                  {v >= 1000 ? `${v / 1000}k` : v}x
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* PBP Offset */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[10px] text-gray-400 whitespace-nowrap">PBP Offset</span>
+        <input
+          type="range"
+          min={-10}
+          max={5}
+          step={0.5}
+          value={pbpOffset}
+          onChange={(e) => handlePbpOffset(Number(e.target.value))}
+          className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+        />
+        <span className="text-[10px] font-mono text-gray-300 w-10 text-right">
+          {pbpOffset > 0 ? "+" : ""}{pbpOffset}s
+        </span>
+      </div>
 
       {/* Clickable progress bar */}
       {status && status.total_events > 0 && (

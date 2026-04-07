@@ -328,6 +328,105 @@ class Orderbook:
     def get_best_bid(self) -> int | None:
         return self.bids[0].price if self.bids else None
 
+    def load_mm_state(self, yes_levels: dict[int, int], no_levels: dict[int, int]):
+        """
+        Replace all MM orders with the given levels.
+
+        yes_levels: {yes_price_cents: size} — bids (buy YES)
+        no_levels:  {no_price_cents: size}  — asks (buy NO = sell YES at 100-no_price)
+
+        Does NOT fire callbacks — caller handles broadcasting.
+        After loading, sweeps for crosses against any resting user orders.
+        """
+        # Save user orders (non-MM) before clearing
+        user_asks = [o for o in self.asks if not o.is_mm]
+        user_bids = [o for o in self.bids if not o.is_mm]
+
+        self.bids = list(user_bids)
+        self.asks = list(user_asks)
+
+        for price, size in yes_levels.items():
+            if size > 0 and 1 <= price <= 99:
+                order = OrderEntry(
+                    order_id=str(uuid.uuid4()),
+                    client_order_id=str(uuid.uuid4()),
+                    ticker=self.ticker,
+                    action="buy",
+                    price=price,
+                    remaining=size,
+                    initial_count=size,
+                    time_in_force="good_till_canceled",
+                    is_mm=True,
+                )
+                self._insert_bid(order)
+
+        for no_price, size in no_levels.items():
+            yes_price = 100 - no_price
+            if size > 0 and 1 <= yes_price <= 99:
+                order = OrderEntry(
+                    order_id=str(uuid.uuid4()),
+                    client_order_id=str(uuid.uuid4()),
+                    ticker=self.ticker,
+                    action="sell",
+                    price=yes_price,
+                    remaining=size,
+                    initial_count=size,
+                    time_in_force="good_till_canceled",
+                    is_mm=True,
+                )
+                self._insert_ask(order)
+
+        # Sweep: match any user orders that now cross the new MM levels
+        self._sweep_crosses()
+
+    def _sweep_crosses(self):
+        """Match any crossed orders after MM state load.
+
+        Checks if user asks can be filled by MM bids (or vice versa).
+        Fires fill/trade callbacks for matched user orders.
+        """
+        matched = True
+        while matched:
+            matched = False
+            # Check if best bid >= best ask (crossed book)
+            if not self.bids or not self.asks:
+                break
+            best_bid = self.bids[0]
+            best_ask = self.asks[0]
+            if best_bid.price < best_ask.price:
+                break
+
+            # They cross — match them
+            fill_price = best_ask.price if best_ask.is_mm else best_bid.price
+            fill_count = min(best_bid.remaining, best_ask.remaining)
+            ts = time.time()
+            trade_id = str(uuid.uuid4())
+
+            # Only fire callbacks for non-MM (user) orders
+            if not best_ask.is_mm:
+                fill = Fill(trade_id, self.ticker, "sell", "yes", fill_count, fill_price, ts)
+                trade = Trade(trade_id, self.ticker, fill_price, fill_count, "yes", ts)
+                if self._on_fill:
+                    self._on_fill(fill)
+                if self._on_trade:
+                    self._on_trade(trade)
+            if not best_bid.is_mm:
+                fill = Fill(trade_id, self.ticker, "buy", "yes", fill_count, fill_price, ts)
+                trade = Trade(trade_id, self.ticker, fill_price, fill_count, "yes", ts)
+                if self._on_fill:
+                    self._on_fill(fill)
+                if self._on_trade:
+                    self._on_trade(trade)
+
+            # Reduce/remove matched orders
+            best_bid.remaining -= fill_count
+            best_ask.remaining -= fill_count
+            if best_bid.remaining <= 0:
+                self.bids.pop(0)
+            if best_ask.remaining <= 0:
+                self.asks.pop(0)
+            matched = True
+
     def get_resting_orders(self, is_mm: bool | None = None) -> list[OrderEntry]:
         orders = self.bids + self.asks
         if is_mm is not None:

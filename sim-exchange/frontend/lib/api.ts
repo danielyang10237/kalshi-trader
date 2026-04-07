@@ -68,6 +68,14 @@ export interface OrderLog {
   is_mm: boolean;
   created_at: number;
   fills: Fill[];
+  market?: {
+    best_bid: number | null;
+    best_ask: number | null;
+    home_score: number;
+    away_score: number;
+    period: string | number;
+    clock: string | number;
+  };
 }
 
 export interface ReplayStatus {
@@ -79,9 +87,7 @@ export interface ReplayStatus {
   total_events: number;
   events_played: number;
   metadata: Record<string, string>;
-  spread: number;
-  levels: number;
-  volume_mult: number;
+  pbp_offset_sec: number;
 }
 
 // =============================================================================
@@ -183,12 +189,12 @@ export async function seekReplay(
   });
 }
 
-export async function setReplayParams(
-  params: { spread?: number; levels?: number; volume_mult?: number },
-): Promise<{ success: boolean }> {
-  return simFetch("/replay/params", {
+export async function skipReplay(
+  offsetSec: number,
+): Promise<{ success: boolean; index?: number }> {
+  return simFetch("/replay/skip", {
     method: "POST",
-    body: JSON.stringify(params),
+    body: JSON.stringify({ offset_sec: offsetSec }),
   });
 }
 
@@ -198,6 +204,15 @@ export async function setReplaySpeed(
   return simFetch("/replay/speed", {
     method: "POST",
     body: JSON.stringify({ speed }),
+  });
+}
+
+export async function setPbpOffset(
+  offsetSec: number,
+): Promise<{ pbp_offset_sec: number }> {
+  return simFetch("/replay/pbp_offset", {
+    method: "POST",
+    body: JSON.stringify({ offset_sec: offsetSec }),
   });
 }
 
@@ -248,6 +263,38 @@ export interface PBPResponse {
 
 export async function getPBP(limit: number = 20): Promise<PBPResponse> {
   return simFetch(`/pbp?limit=${limit}`);
+}
+
+// Snapshot Feeder
+export interface FeederStatus {
+  enabled: boolean;
+  connected: boolean;
+  game_id: string;
+  home_team: string;
+  away_team: string;
+  total_actions: number;
+  actions_played: number;
+  trading_ws_url: string;
+  home_score: number;
+  away_score: number;
+  period: number;
+  clock: number;
+}
+
+export async function getFeederStatus(): Promise<FeederStatus> {
+  return simFetch("/feeder/status");
+}
+
+export async function toggleFeeder(
+  enabled: boolean,
+  tradingWsUrl?: string,
+): Promise<FeederStatus> {
+  const body: Record<string, unknown> = { enabled };
+  if (tradingWsUrl) body.trading_ws_url = tradingWsUrl;
+  return simFetch("/feeder/toggle", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 // Health check

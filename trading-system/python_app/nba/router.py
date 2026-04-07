@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 from .game_cache import load_game, save_game, list_games, delete_game
 from .espn import lookup_espn_game_id, fetch_roster, parse_ticker
-from .engine import start_engine, stop_engine, list_engines, get_engine
+from .engine import start_engine, stop_engine, list_engines, get_engine, _load_historical_roster
+from ..settings import settings
 
 router = APIRouter(prefix="/nba", tags=["nba"])
 
@@ -180,9 +181,6 @@ async def stop_game(game_id: str):
 @router.get("/games/{game_id}/roster")
 async def get_roster(game_id: str):
     state = load_game(game_id)
-    cached = state.get("roster")
-    if cached and _roster_has_data(cached):
-        return {"espn_game_id": state.get("espn_game_id"), "roster": cached}
 
     espn_id = lookup_espn_game_id(game_id)
     if not espn_id:
@@ -195,6 +193,29 @@ async def get_roster(game_id: str):
         if parsed:
             home_team = home_team or parsed["home"]
             away_team = away_team or parsed["away"]
+
+    # In sim mode, always use historical roster (skip cache from live ESPN)
+    if settings.sim_mode:
+        hist = _load_historical_roster(espn_id, away_team, home_team)
+        if hist:
+            roster = {
+                "home": hist["home"],
+                "away": hist["away"],
+                "injuries": {"home": [], "away": []},
+                "leaders": {"home": [], "away": []},
+                "predictor": None,
+                "odds": None,
+            }
+            state["espn_game_id"] = espn_id
+            state["roster"] = roster
+            save_game(state)
+            return {"espn_game_id": espn_id, "roster": roster}
+
+    # Live mode: check cache first
+    cached = state.get("roster")
+    if cached and _roster_has_data(cached):
+        return {"espn_game_id": state.get("espn_game_id"), "roster": cached}
+
     try:
         roster = await fetch_roster(espn_id, home_team=home_team, away_team=away_team)
     except Exception as e:
@@ -250,11 +271,15 @@ async def engine_status_single(game_id: str):
 # ---------- trading controls ----------
 
 class TradingParamsRequest(BaseModel):
-    min_edge: Optional[int] = None
+    min_size: Optional[int] = None
+    max_size: Optional[int] = None
     max_position: Optional[int] = None
     max_exposure: Optional[int] = None
-    order_size: Optional[int] = None
-    edge_decay: Optional[float] = None
+    fee_rate: Optional[float] = None
+    delta_scale: Optional[float] = None
+    min_delta: Optional[float] = None
+    delta_full_scale: Optional[float] = None
+    aggression: Optional[int] = None
     enabled: Optional[bool] = None
 
 
@@ -271,16 +296,24 @@ async def update_trading_params(game_id: str, req: TradingParamsRequest):
     if not engine:
         raise HTTPException(404, "engine not running for this game")
     p = engine.trader.params
-    if req.min_edge is not None:
-        p.min_edge = req.min_edge
+    if req.min_size is not None:
+        p.min_size = req.min_size
+    if req.max_size is not None:
+        p.max_size = req.max_size
     if req.max_position is not None:
         p.max_position = req.max_position
     if req.max_exposure is not None:
         p.max_exposure = req.max_exposure
-    if req.order_size is not None:
-        p.order_size = req.order_size
-    if req.edge_decay is not None:
-        p.edge_decay = req.edge_decay
+    if req.fee_rate is not None:
+        p.fee_rate = req.fee_rate
+    if req.delta_scale is not None:
+        p.delta_scale = req.delta_scale
+    if req.min_delta is not None:
+        p.min_delta = req.min_delta
+    if req.delta_full_scale is not None:
+        p.delta_full_scale = req.delta_full_scale
+    if req.aggression is not None:
+        p.aggression = req.aggression
     if req.enabled is not None:
         p.enabled = req.enabled
     return engine.trader.to_dict()

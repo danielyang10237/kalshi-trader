@@ -11,6 +11,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Request, Query
 
 from .ws_api import ws_manager
+from . import admin_api
 
 DATA_CACHE = Path(__file__).parent.parent / "data_cache"
 
@@ -63,10 +64,13 @@ async def create_order(request: Request):
     if not book:
         return {"error": f"No book for ticker {ticker}"}
 
-    # Suppress delta callbacks — we'll send a snapshot after to avoid duplication
-    # from multiple WS subscribers
-    saved_cb = book._on_delta
+    # Suppress delta/fill/trade callbacks — REST path handles these manually
+    saved_delta = book._on_delta
+    saved_fill = book._on_fill
+    saved_trade = book._on_trade
     book._on_delta = None
+    book._on_fill = None
+    book._on_trade = None
     result = book.submit_order(
         action=action,
         price=yes_price,
@@ -77,7 +81,9 @@ async def create_order(request: Request):
         order_group_id=order_group_id,
         is_mm=False,
     )
-    book._on_delta = saved_cb
+    book._on_delta = saved_delta
+    book._on_fill = saved_fill
+    book._on_trade = saved_trade
 
     for fill in result.fills:
         account.record_fill(fill)
@@ -105,8 +111,48 @@ async def create_order(request: Request):
         "created_time": result.fills[0].ts if result.fills else __import__("time").time(),
     }
 
-    if result.resting_order:
-        account.log_order(result.resting_order, result.status, [f.to_dict() for f in result.fills])
+    # Capture market context at order time
+    market_context = {
+        "best_bid": book.get_best_bid(),
+        "best_ask": book.get_best_ask(),
+    }
+    # Add game state from replay engine if available
+    from . import admin_api as _admin
+    if _admin.replay_engine:
+        score = _admin.replay_engine.get_current_score()
+        market_context["home_score"] = score.get("home_score", 0)
+        market_context["away_score"] = score.get("away_score", 0)
+        market_context["period"] = score.get("period", "")
+        market_context["clock"] = score.get("clock", "")
+    if _admin.snapshot_feeder and _admin.snapshot_feeder.enabled:
+        sf = _admin.snapshot_feeder
+        market_context["home_score"] = sf.home_box.score
+        market_context["away_score"] = sf.away_box.score
+        market_context["period"] = sf.last_period
+        market_context["clock"] = sf.last_clock
+
+    # Log every order (not just resting) for the trade log
+    from .orderbook import OrderEntry
+    log_entry = result.resting_order or OrderEntry(
+        order_id=order_response["order_id"],
+        client_order_id=client_order_id or "",
+        ticker=ticker,
+        action=action,
+        price=yes_price,
+        remaining=result.remaining,
+        initial_count=count,
+        time_in_force=time_in_force,
+        order_type=order_type,
+        is_mm=False,
+    )
+    account.log_order(log_entry, result.status, [f.to_dict() for f in result.fills],
+                      market_context=market_context)
+
+    # Notify GUI
+    await admin_api.broadcast_gui_event({
+        "type": "order",
+        "data": order_response,
+    })
 
     return {"order": order_response}
 

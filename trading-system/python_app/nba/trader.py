@@ -1,43 +1,58 @@
-"""NBA automated trader.
+"""NBA delta-based directional trader.
 
-Computes edge between model theo and market best ask, applies risk checks,
-and places limit buy orders (lifts the ask) when edge exceeds threshold.
+Captures latency edge by trading on model probability DELTAS rather than levels.
+On each game event: compute how much P(home_win) changed, predict the market's
+repricing direction, and place a one-sided marketable limit order before the
+Kalshi book catches up.
 """
 
-import json
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from ..fills_cache import get_fills
-from ..routes.trading import kalshi, get_or_create_order_group
+from ..settings import settings
 from ..settings import settings
 
 logger = logging.getLogger(__name__)
 
 
+# ── Parameters ───────────────────────────────────────────────────────────────
+
 @dataclass
 class TradingParams:
-    min_edge: int = 3           # cents — minimum edge to trade
-    max_position: int = 200     # max contracts in one direction
-    max_exposure: int = 50000   # cents ($500)
-    order_size: int = 10        # contracts per order
-    edge_decay: Optional[float] = None  # not used for now
-    wp_change_threshold: float = 0.005  # min home_wp change to trigger trade eval
+    min_size: int = 5             # minimum contracts per order
+    max_size: int = 50            # absolute cap per order
+    max_position: int = 200       # max net contracts in one direction
+    max_exposure: int = 50_000    # cents ($500)
+    fee_rate: float = 0.07        # Kalshi fee rate
+    # Delta-specific
+    delta_scale: float = 0.6      # model_delta → expected_move multiplier
+    min_delta: float = 0.03       # minimum |model_delta| to act on
+    delta_full_scale: float = 0.08  # |model_delta| at which to trade max size
+    aggression: int = 0           # cents past bid/ask for ENTRY (0=at, 1=through)
+    exit_offset: int = 0          # cents inside fair for EXIT (0=at fair, 1=1c inside, -1=1c outside)
     enabled: bool = False
 
     def to_dict(self) -> dict:
         return {
-            "min_edge": self.min_edge,
+            "min_size": self.min_size,
+            "max_size": self.max_size,
             "max_position": self.max_position,
             "max_exposure": self.max_exposure,
-            "order_size": self.order_size,
-            "edge_decay": self.edge_decay,
-            "wp_change_threshold": self.wp_change_threshold,
+            "fee_rate": self.fee_rate,
+            "delta_scale": self.delta_scale,
+            "min_delta": self.min_delta,
+            "delta_full_scale": self.delta_full_scale,
+            "aggression": self.aggression,
+            "exit_offset": self.exit_offset,
             "enabled": self.enabled,
         }
 
+
+# ── State ────────────────────────────────────────────────────────────────────
 
 @dataclass
 class TraderState:
@@ -45,64 +60,117 @@ class TraderState:
     params: TradingParams = field(default_factory=TradingParams)
 
     # Best prices from orderbook (cents, 1-99)
-    home_best_ask: Optional[int] = None  # best ask on home YES market
-    away_best_ask: Optional[int] = None  # best ask on away YES market
-    home_best_bid: Optional[int] = None  # best bid on home YES market
-    away_best_bid: Optional[int] = None  # best bid on away YES market
+    home_best_bid: Optional[int] = None
+    home_best_ask: Optional[int] = None
+    away_best_bid: Optional[int] = None
+    away_best_ask: Optional[int] = None
 
     # Market tickers
     home_ticker: Optional[str] = None
     away_ticker: Optional[str] = None
 
-    # Computed from fills
-    home_position: int = 0   # net contracts (positive = long YES)
-    away_position: int = 0
-    home_cost: int = 0       # total cents spent
-    away_cost: int = 0
+    # Position (computed from fills)
+    home_position: int = 0
+    home_cost: int = 0
+
+    # Posterior tracking (for dashboard + delta computation)
+    last_theo: Optional[int] = None
+    last_p_kalshi: Optional[float] = None
+    last_p_computed: Optional[float] = None
+    prev_p_kalshi: Optional[float] = None   # previous snapshot's Kalshi posterior
+
+    # Delta tracking
+    last_model_delta: Optional[float] = None
+    last_expected_move: Optional[float] = None
+    last_direction: Optional[str] = None     # "BUY", "SELL", or "SKIP"
+    last_order_price: Optional[int] = None
+    last_size: Optional[int] = None
+    last_fair: Optional[float] = None        # kalshi_pre + expected_move*100
+
+    # Exit order tracking
+    last_exit_price: Optional[int] = None
 
     # Trade log
     trades: list = field(default_factory=list)
     last_trade_time: float = 0.0
 
-    # Last wp that triggered a trade evaluation
-    last_evaluated_wp: Optional[float] = None
-
-    def should_evaluate(self, home_wp: float) -> bool:
-        """Return True if home_wp has changed enough to warrant a trade evaluation."""
-        if self.last_evaluated_wp is None:
-            return True
-        return abs(home_wp - self.last_evaluated_wp) >= self.params.wp_change_threshold
-
     def total_exposure(self) -> int:
-        """Total cents at risk across both sides."""
-        return self.home_cost + self.away_cost
+        return self.home_cost
 
     def to_dict(self) -> dict:
         return {
             "params": self.params.to_dict(),
-            "home_best_ask": self.home_best_ask,
-            "away_best_ask": self.away_best_ask,
             "home_best_bid": self.home_best_bid,
+            "home_best_ask": self.home_best_ask,
             "away_best_bid": self.away_best_bid,
+            "away_best_ask": self.away_best_ask,
             "home_ticker": self.home_ticker,
             "away_ticker": self.away_ticker,
             "home_position": self.home_position,
-            "away_position": self.away_position,
             "home_cost": self.home_cost,
-            "away_cost": self.away_cost,
             "total_exposure": self.total_exposure(),
-            "last_evaluated_wp": self.last_evaluated_wp,
+            "last_theo": self.last_theo,
+            "last_p_kalshi": self.last_p_kalshi,
+            "last_p_computed": self.last_p_computed,
+            "prev_p_kalshi": self.prev_p_kalshi,
+            "last_model_delta": self.last_model_delta,
+            "last_expected_move": self.last_expected_move,
+            "last_direction": self.last_direction,
+            "last_order_price": self.last_order_price,
+            "last_size": self.last_size,
+            "last_fair": self.last_fair,
+            "last_exit_price": self.last_exit_price,
             "recent_trades": self.trades[-10:],
         }
 
 
-def compute_position_from_fills(ticker: str) -> tuple[int, int]:
-    """Compute (net_position, total_cost) from cached fills for a ticker.
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-    Returns (net_contracts, cost_cents).
-    Positive net = long YES, negative = short YES.
+def _get_or_create_group(kalshi_client, group_key: str, market_order_groups: dict) -> str:
+    """Get or create an order group by arbitrary key."""
+    if group_key in market_order_groups:
+        return market_order_groups[group_key]
+    result = kalshi_client.trades.create_order_group(contracts_limit=100000)
+    gid = result.get("order_group_id") or result.get("order_group", {}).get("order_group_id")
+    if not gid:
+        raise Exception(f"Failed to create order group: {result}")
+    market_order_groups[group_key] = gid
+    return gid
+
+
+def compute_position_from_fills(ticker: str) -> tuple[int, int]:
+    """Compute (net_position, total_cost) from fills.
+
+    In sim mode, queries the sim exchange REST API directly (fills WS
+    may not be connected). Falls back to local fills cache.
     """
-    fills = get_fills(ticker=ticker, limit=10000)
+    if settings.sim_mode:
+        try:
+            import requests
+            resp = requests.get(
+                f"{settings.kalshi_ws_url.replace('ws://', 'http://').replace('/trade-api/ws/v2', '')}/sim/account",
+                timeout=1,
+            )
+            if resp.ok:
+                data = resp.json()
+                pos = data.get("positions", {}).get(ticker, 0)
+                # Compute cost from fills
+                cost = 0
+                for f in data.get("fills", []):
+                    if f.get("ticker") != ticker:
+                        continue
+                    c = f.get("count", 0)
+                    p = f.get("yes_price", 0)
+                    if f.get("action") == "buy":
+                        cost += c * p
+                    else:
+                        cost -= c * p
+                return pos, max(cost, 0)
+        except Exception as e:
+            logger.warning(f"[sim] Failed to fetch position from sim: {e}")
+
+    # Fallback: local fills cache
+    fills = get_fills(ticker=ticker, limit=10_000)
     net = 0
     cost = 0
     for f in fills:
@@ -127,143 +195,235 @@ def compute_position_from_fills(ticker: str) -> tuple[int, int]:
     return net, max(cost, 0)
 
 
-def evaluate_and_trade(state: TraderState, home_wp: float) -> Optional[dict]:
-    """Evaluate edge and place a trade if conditions are met.
+def compute_fee_per_contract_cents(p: float, fee_rate: float = 0.07) -> float:
+    """Per-contract Kalshi fee in cents at probability p."""
+    fee_dollars = math.ceil(fee_rate * p * (1 - p) * 100) / 100
+    return fee_dollars * 100
 
-    Called on every game state update when trading is enabled.
+
+def compute_delta_size(model_delta: float, params: TradingParams) -> int:
+    """Size based on delta magnitude.
+
+    Larger |model_delta| = more contracts. Linear scale from min_size to max_size.
+    """
+    abs_delta = abs(model_delta)
+    scale = min(abs_delta / params.delta_full_scale, 1.0)
+    size = round(params.min_size + (params.max_size - params.min_size) * scale)
+    return max(params.min_size, min(params.max_size, size))
+
+
+# ── Core: cancel and trade on delta ──────────────────────────────────────────
+
+def cancel_and_requote(
+    state: TraderState,
+    p_kalshi: float,
+    p_computed: float,
+    model_delta: float,
+    kalshi_pre: float,
+) -> Optional[dict]:
+    """Cancel all resting orders and place a directional order based on model delta.
 
     Parameters
     ----------
     state : TraderState
-        Current trading state with orderbook prices and positions.
-    home_wp : float
-        Model P(home_win) from GAM inference, in [0, 1].
+    p_kalshi : float        Current Kalshi-anchored posterior P(home_win).
+    p_computed : float      Current XGBoost-anchored posterior P(home_win).
+    model_delta : float     Change in Kalshi posterior since last snapshot.
+    kalshi_pre : float      Market mid in cents BEFORE this snapshot (pre-reprice).
 
     Returns
     -------
-    dict or None
-        Trade result if a trade was placed, None otherwise.
+    dict or None    Trade record if an order was placed.
     """
-    if not state.params.enabled:
-        return None
-    if home_wp is None:
-        return None
+    from ..routes.trading import kalshi, get_or_create_order_group, market_order_groups
 
-    # Model prices in cents
-    model_home = home_wp * 100   # theo for home YES
-    model_away = (1 - home_wp) * 100  # theo for away YES
-
-    # Evaluate all 4 possible trades and pick the best edge:
-    #   1. Buy home YES  at home_best_ask  → edge = model_home - ask  (underpriced)
-    #   2. Sell home YES at home_best_bid  → edge = bid - model_home  (overpriced)
-    #   3. Buy away YES  at away_best_ask  → edge = model_away - ask
-    #   4. Sell away YES at away_best_bid  → edge = bid - model_away
-    # Note: "Buy home YES" ≡ "Sell away YES" economically, but different prices/tickers.
-    candidates = []
-
-    if state.home_best_ask is not None:
-        edge = model_home - state.home_best_ask
-        candidates.append(("BUY", "home", state.home_ticker, state.home_best_ask, edge, model_home))
-
-    if state.home_best_bid is not None:
-        edge = state.home_best_bid - model_home
-        candidates.append(("SELL", "home", state.home_ticker, state.home_best_bid, edge, model_home))
-
-    if state.away_best_ask is not None:
-        edge = model_away - state.away_best_ask
-        candidates.append(("BUY", "away", state.away_ticker, state.away_best_ask, edge, model_away))
-
-    if state.away_best_bid is not None:
-        edge = state.away_best_bid - model_away
-        candidates.append(("SELL", "away", state.away_ticker, state.away_best_bid, edge, model_away))
-
-    if not candidates:
+    if not state.params.enabled or not state.home_ticker:
         return None
 
-    # Pick the candidate with the largest edge
-    candidates.sort(key=lambda c: c[4], reverse=True)
-    action, side, ticker, price, best_edge, model_price = candidates[0]
+    ticker = state.home_ticker
+    params = state.params
 
-    if best_edge < state.params.min_edge:
+    # ── Step 1: cancel entry orders only (preserve exit orders) ──
+    entry_group_key = f"{ticker}__entry"
+    if entry_group_key in market_order_groups:
+        try:
+            kalshi.trades.delete_order_group(market_order_groups[entry_group_key])
+        except Exception as e:
+            logger.warning(f"[delta] Failed to delete entry group: {e}")
+        market_order_groups.pop(entry_group_key, None)
+
+    # ── Step 2: check delta threshold ──
+    abs_delta = abs(model_delta)
+    if abs_delta < params.min_delta:
+        state.last_direction = "SKIP"
+        state.last_model_delta = model_delta
+        state.last_expected_move = None
+        state.last_order_price = None
+        state.last_size = 0
         return None
 
-    # ── Position & exposure risk checks ──
-    # Refresh positions from fills cache
-    if ticker:
-        pos, cost = compute_position_from_fills(ticker)
-        if side == "home":
-            state.home_position = pos
-            state.home_cost = cost
-        else:
-            state.away_position = pos
-            state.away_cost = cost
+    # ── Step 3: compute expected move and fair value ──
+    expected_move = model_delta * params.delta_scale
+    fair = kalshi_pre + expected_move * 100
+    direction = "BUY" if model_delta > 0 else "SELL"
 
-    cur_pos = state.home_position if side == "home" else state.away_position
-    # BUY increases position, SELL decreases
-    if action == "BUY" and cur_pos >= state.params.max_position:
-        return None
-    if action == "SELL" and cur_pos <= -state.params.max_position:
+    # ── Step 4: refresh position ──
+    pos, cost = compute_position_from_fills(ticker)
+    state.home_position = pos
+    state.home_cost = cost
+
+    # ── Step 5: exposure check ──
+    if cost >= params.max_exposure:
+        state.last_direction = "SKIP"
         return None
 
-    if state.total_exposure() >= state.params.max_exposure:
-        return None
+    # ── Step 6: compute size with inventory skew ──
+    raw_size = compute_delta_size(model_delta, params)
 
-    size = min(state.params.order_size, state.params.max_position - abs(cur_pos))
-    if size <= 0:
-        return None
+    if direction == "BUY":
+        # Buying increases long position
+        if pos >= params.max_position:
+            state.last_direction = "SKIP"
+            return None
+        # Inventory skew: reduce size when adding to existing direction
+        if pos > 0:
+            remaining_capacity = params.max_position - pos
+            raw_size = min(raw_size, remaining_capacity)
+        # If already short and buying, that's reducing risk — no reduction needed
+    else:
+        # Selling decreases position (or goes short)
+        if pos <= -params.max_position:
+            state.last_direction = "SKIP"
+            return None
+        if pos < 0:
+            remaining_capacity = params.max_position + pos
+            raw_size = min(raw_size, remaining_capacity)
 
+    size = max(1, raw_size)
+
+    # ── Step 7: determine order price ──
+    if direction == "BUY":
+        if state.home_best_ask is None:
+            state.last_direction = "SKIP"
+            return None
+        order_price = min(99, state.home_best_ask + params.aggression)
+    else:
+        if state.home_best_bid is None:
+            state.last_direction = "SKIP"
+            return None
+        order_price = max(1, state.home_best_bid - params.aggression)
+
+    # ── Step 8: compute fee (factored into exit price, not used as gate) ──
+    p_at_price = order_price / 100.0
+    fee_cents = compute_fee_per_contract_cents(p_at_price, params.fee_rate)
+
+    # ── Step 9: build trade record ──
     trade_record = {
         "time": time.time(),
-        "action": action,
-        "side": side,
-        "ticker": ticker,
-        "price": price,
+        "direction": direction,
+        "order_price": order_price,
         "size": size,
-        "edge": round(best_edge, 1),
-        "model_price": round(model_price, 1),
+        "model_delta": round(model_delta, 5),
+        "expected_move": round(expected_move, 5),
+        "fair": round(fair, 1),
+        "kalshi_pre": round(kalshi_pre, 1),
+        "p_kalshi": round(p_kalshi, 4),
+        "p_computed": round(p_computed, 4),
+        "position": pos,
+        "fee_cents": round(fee_cents, 2),
         "paper": settings.paper_trade,
     }
 
+    # ── Step 10: compute exit price ──
+    # Exit at where we expect the market to settle after repricing.
+    # exit_offset: 0 = at fair, positive = closer to entry (more likely to fill),
+    # negative = further from entry (more profit per trade, less likely to fill).
+    if direction == "BUY":
+        # Bought → sell at fair (where market should reprice to)
+        exit_price = max(1, min(99, round(fair) - params.exit_offset))
+    else:
+        # Sold → buy back at fair
+        exit_price = max(1, min(99, round(fair) + params.exit_offset))
+
+    # ── Step 11: place orders ──
     if settings.paper_trade:
         trade_record["result"] = "PAPER"
-        state.trades.append(trade_record)
-        state.last_trade_time = time.time()
+        trade_record["exit_price"] = exit_price
         logger.info(
-            f"[trader][PAPER] {action} {side} YES {size}@{price}c | "
-            f"edge={best_edge:.1f}c | model={model_price:.1f}c | ticker={ticker}"
+            f"[delta][PAPER] {direction} {size}@{order_price}c → exit@{exit_price}c | "
+            f"delta={model_delta:+.4f} move={expected_move:+.4f} fair={fair:.1f} "
+            f"pos={pos} mid={kalshi_pre:.1f}"
         )
-        return trade_record
+    else:
+        try:
+            # Entry: IOC to fill immediately before market reprices
+            entry_gid = _get_or_create_group(kalshi, entry_group_key, market_order_groups)
+            if direction == "BUY":
+                r = kalshi.trades.buy_limit_order(
+                    ticker=ticker,
+                    count=size,
+                    price=order_price,
+                    order_group_id=entry_gid,
+                    time_in_force="immediate_or_cancel",
+                )
+            else:
+                r = kalshi.trades.sell_limit_order(
+                    ticker=ticker,
+                    count=size,
+                    price=order_price,
+                    order_group_id=entry_gid,
+                    time_in_force="immediate_or_cancel",
+                )
+            trade_record["result"] = r
 
-    # Live order
-    try:
-        order_group_id = get_or_create_order_group(ticker)
-        if action == "BUY":
-            result = kalshi.trades.buy_limit_order(
-                ticker=ticker,
-                count=size,
-                price=price,
-                order_group_id=order_group_id,
-                time_in_force="immediate_or_cancel",
-            )
-        else:
-            result = kalshi.trades.sell_limit_order(
-                ticker=ticker,
-                count=size,
-                price=price,
-                order_group_id=order_group_id,
-                time_in_force="immediate_or_cancel",
-            )
+            # Exit: GTC resting order at fair value (opposite side)
+            exit_group_key = f"{ticker}__exit"
+            exit_gid = _get_or_create_group(kalshi, exit_group_key, market_order_groups)
+            try:
+                if direction == "BUY":
+                    # Bought → resting sell at fair to take profit
+                    kalshi.trades.sell_limit_order(
+                        ticker=ticker,
+                        count=size,
+                        price=exit_price,
+                        order_group_id=exit_gid,
+                        time_in_force="good_till_canceled",
+                    )
+                else:
+                    # Sold → resting buy at fair to take profit
+                    kalshi.trades.buy_limit_order(
+                        ticker=ticker,
+                        count=size,
+                        price=exit_price,
+                        order_group_id=exit_gid,
+                        time_in_force="good_till_canceled",
+                    )
+                trade_record["exit_price"] = exit_price
+                logger.info(
+                    f"[delta] {direction} {size}@{order_price}c → exit@{exit_price}c | "
+                    f"delta={model_delta:+.4f} move={expected_move:+.4f} fair={fair:.1f} "
+                    f"pos={pos} mid={kalshi_pre:.1f}"
+                )
+            except Exception as e:
+                logger.warning(f"[delta] Exit order failed: {e}")
+                trade_record["exit_error"] = str(e)
 
-        trade_record["result"] = result
-        state.trades.append(trade_record)
-        state.last_trade_time = time.time()
+        except Exception as e:
+            logger.error(f"[delta] Entry order failed: {e}")
+            trade_record["error"] = str(e)
 
-        logger.info(
-            f"[trader] ORDER: {action} {side} YES {size}@{price}c | "
-            f"edge={best_edge:.1f}c | ticker={ticker}"
-        )
-        return trade_record
+    # ── Step 12: update state ──
+    state.last_theo = round(p_kalshi * 100)
+    state.last_p_kalshi = p_kalshi
+    state.last_p_computed = p_computed
+    state.last_model_delta = model_delta
+    state.last_expected_move = expected_move
+    state.last_direction = direction
+    state.last_order_price = order_price
+    state.last_size = size
+    state.last_fair = fair
+    state.last_exit_price = exit_price
+    state.last_trade_time = time.time()
+    state.trades.append(trade_record)
 
-    except Exception as e:
-        logger.error(f"[trader] Order failed: {e}")
-        return {"error": str(e), "action": action, "side": side, "ticker": ticker}
+    return trade_record
