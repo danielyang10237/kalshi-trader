@@ -49,10 +49,38 @@ async def ws_orderbook(ws: WebSocket, market_ticker: str):
     stream = kalshi.stream.orderbook(market_ticker)
     stream_task = asyncio.create_task(stream.run_forever())
 
+    def _convert(msg_str: str) -> str:
+        """Translate Kalshi's new fp-dollar fields into the legacy integer-cent
+        fields the frontend (OrderbookLadder etc.) reads. Adds yes/no/price/delta
+        alongside the *_dollars_fp / price_dollars / delta_fp Kalshi now sends,
+        so callers that read either form continue to work."""
+        try:
+            d = json.loads(msg_str)
+            d = json.loads(d) if isinstance(d, str) else d
+            t = d.get("type")
+            m = d.get("msg")
+            if isinstance(m, dict):
+                if t == "orderbook_snapshot":
+                    if "yes_dollars_fp" in m and "yes" not in m:
+                        m["yes"] = [[int(round(float(p)*100)), int(float(s))]
+                                     for p, s in m["yes_dollars_fp"]]
+                    if "no_dollars_fp" in m and "no" not in m:
+                        m["no"]  = [[int(round(float(p)*100)), int(float(s))]
+                                     for p, s in m["no_dollars_fp"]]
+                elif t == "orderbook_delta":
+                    if "price_dollars" in m and "price" not in m:
+                        m["price"] = int(round(float(m["price_dollars"]) * 100))
+                    if "delta_fp" in m and "delta" not in m:
+                        m["delta"] = int(float(m["delta_fp"]))
+            return json.dumps(d)
+        except Exception:
+            return msg_str
+
     async def forward_messages():
         try:
             while True:
                 msg = await stream.out_queue.get()
+                msg = _convert(msg)
                 # Feed best ask to any engine tracking this ticker
                 try:
                     parsed = json.loads(msg)

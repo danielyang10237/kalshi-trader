@@ -419,6 +419,9 @@ export interface TradingParams {
   edge_decay: number | null;
   wp_change_threshold: number;
   enabled: boolean;
+  strategy: 'edge' | 'delta';
+  delta_threshold: number;
+  delta_min_interval_sec: number;
 }
 
 export interface TraderState {

@@ -1,0 +1,105 @@
+{
+  "game_id": "KXNBAGAME-26MAR30PHIMIA",
+  "home_team": null,
+  "away_team": null,
+  "home_score": 0,
+  "away_score": 0,
+  "possession": null,
+  "quarter": 1,
+  "events": [],
+  "espn_game_id": "401810946",
+  "roster": {
+    "home": [],
+    "away": [],
+    "injuries": {
+      "home": [
+        {
+          "name": "Tyler Herro",
+          "position": "G",
+          "jersey": "14",
+          "status": "Out",
+          "injury": "Foot",
+          "return_date": "2026-10-01"
+        },
+        {
+          "name": "Bam Adebayo",
+          "position": "C",
+          "jersey": "13",
+          "status": "Out",
+          "injury": "Back",
+          "return_date": "2026-10-01"
+        },
+        {
+          "name": "Dru Smith",
+          "position": "G",
+          "jersey": "12",
+          "status": "Out",
+          "injury": "Foot - Soreness",
+          "return_date": "2026-10-01"
+        },
+        {
+          "name": "Nikola Jovic",
+          "position": "F",
+          "jersey": "5",
+          "status": "Out",
+          "injury": "Ankle - Sprain",
+          "return_date": "2026-10-01"
+        }
+      ],
+      "away": []
+    },
+    "leaders": {
+      "home": [
+        {
+          "name": "Tyler Herro",
+          "position": "G",
+          "jersey": "14",
+          "stat": "30",
+          "stat_name": "Points",
+          "status": "Out"
+        },
+        {
+          "name": "Bam Adebayo",
+          "position": "C",
+          "jersey": "13",
+          "stat": "6",
+          "stat_name": "Assists",
+          "status": "Out"
+        }
+      ],
+      "away": [
+        {
+          "name": "Joel Embiid",
+          "position": "C",
+          "jersey": "21",
+          "stat": "26",
+          "stat_name": "Points",
+          "status": ""
+        },
+        {
+          "name": "Tyrese Maxey",
+          "position": "G",
+          "jersey": "0",
+          "stat": "9",
+          "stat_name": "Assists",
+          "status": ""
+        },
+        {
+          "name": "Kelly Oubre Jr.",
+          "position": "G",
+          "jersey": "9",
+          "stat": "11",
+          "stat_name": "Rebounds",
+          "status": ""
+        }
+      ]
+    },
+    "predictor": null,
+    "odds": {
+      "spread": 2.5,
+      "over_under": 242.5,
+      "home_ml": 120,
+      "away_ml": -142
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "game_id": "KXNBAGAME-26MAY28OKCSAS",
+  "timestamp": 1780312027.4988449,
+  "home_team": "SAS",
+  "away_team": "OKC",
+  "possession": "home",
+  "quarter": 4,
+  "time_range": "5-0",
+  "timer_seconds": 185,
+  "stopped": false,
+  "pending_ft_signed": 0,
+  "is_dead_ball": true,
+  "home": {
+    "score": 115,
+    "fgm": 40,
+    "fga": 84,
+    "fg3m": 15,
+    "fg3a": 39,
+    "ftm": 20,
+    "fta": 23,
+    "oreb": 17,
+    "dreb": 39,
+    "tov": 11,
+    "stl": 6,
+    "pf": 14,
+    "timeouts_used": 5,
+    "period_fouls": {
+      "1": 3,
+      "2": 3,
+      "3": 4,
+      "4": 4
+    }
+  },
+  "away": {
+    "score": 88,
+    "fgm": 34,
+    "fga": 88,
+    "fg3m": 9,
+    "fg3a": 35,
+    "ftm": 11,
+    "fta": 12,
+    "oreb": 17,
+    "dreb": 31,
+    "tov": 12,
+    "stl": 9,
+    "pf": 20,
+    "timeouts_used": 5,
+    "period_fouls": {
+      "1": 3,
+      "2": 4,
+      "3": 8,
+      "4": 5
+    }
+  },
+  "roster": null,
+  "espn_game_id": null
+}

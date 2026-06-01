@@ -12,7 +12,7 @@ from typing import Optional
 
 from .espn import fetch_roster, lookup_espn_game_id, parse_ticker, _load_static_roster
 from . import live_inference
-from .trader import TraderState, TradingParams, evaluate_and_trade
+from .trader import TraderState, TradingParams, evaluate_and_trade, evaluate_and_trade_delta
 
 # Add nba/ to path so we can import build_prediction_row
 _NBA_DIR = Path(__file__).parent.parent.parent.parent / "nba"
@@ -329,16 +329,20 @@ class NbaEngine:
             "home_wp": round(self.home_wp, 4) if self.home_wp else None,
         }
 
-        # Run trading evaluation only when wp changes enough and trading is enabled
-        if (self.home_wp is not None
-                and self.trader.params.enabled
-                and self.trader.should_evaluate(self.home_wp)):
-            logger.debug(
-                f"[{self.game_id}] wp changed: "
-                f"{self.trader.last_evaluated_wp} -> {self.home_wp:.4f}, evaluating trade"
-            )
-            self.trader.last_evaluated_wp = self.home_wp
-            trade_result = evaluate_and_trade(self.trader, self.home_wp)
+        # Run trading evaluation. Strategy chooses the call path:
+        #   "delta" → momentum on home_wp's per-snapshot move (always evaluated)
+        #   "edge"  → existing logic, gated by wp_change_threshold
+        if self.home_wp is not None and self.trader.params.enabled:
+            trade_result = None
+            if self.trader.params.strategy == "delta":
+                trade_result = evaluate_and_trade_delta(self.trader, self.home_wp)
+            elif self.trader.should_evaluate(self.home_wp):
+                logger.debug(
+                    f"[{self.game_id}] wp changed: "
+                    f"{self.trader.last_evaluated_wp} -> {self.home_wp:.4f}, evaluating trade"
+                )
+                self.trader.last_evaluated_wp = self.home_wp
+                trade_result = evaluate_and_trade(self.trader, self.home_wp)
             if trade_result:
                 enriched["last_trade"] = trade_result
 
