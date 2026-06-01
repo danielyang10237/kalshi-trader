@@ -633,7 +633,7 @@ export default function OrderbookPage() {
     }
   };
 
-  const handleParamChange = async (key: keyof TradingParams, value: number | null) => {
+  const handleParamChange = async (key: keyof TradingParams, value: number | string | null) => {
     if (!eventTicker || !engineStatus?.is_live) return;
     const updated = { ...tradingParams, [key]: value };
     setTradingParams(updated);
@@ -723,19 +723,39 @@ export default function OrderbookPage() {
 
   const renderTradingParamsEditor = () => {
     if (!engineStatus?.is_live) return null;
-    const paramFields: { key: keyof TradingParams; label: string; suffix: string; step?: number }[] = [
-      { key: 'min_edge', label: 'Min Edge', suffix: '¢' },
+    const strategy = (tradingParams.strategy as 'edge' | 'delta') ?? 'edge';
+    const commonFields: { key: keyof TradingParams; label: string; suffix: string; step?: number }[] = [
       { key: 'order_size', label: 'Order Size', suffix: ' contracts' },
       { key: 'max_position', label: 'Max Position', suffix: ' contracts' },
       { key: 'max_exposure', label: 'Max Exposure', suffix: '', step: 100 },
+    ];
+    const edgeFields: { key: keyof TradingParams; label: string; suffix: string; step?: number }[] = [
+      { key: 'min_edge', label: 'Min Edge', suffix: '¢' },
       { key: 'wp_change_threshold', label: 'WP Δ Threshold', suffix: '', step: 0.001 },
     ];
+    const deltaFields: { key: keyof TradingParams; label: string; suffix: string; step?: number }[] = [
+      { key: 'delta_threshold', label: 'Δ Threshold', suffix: '', step: 0.001 },
+      { key: 'delta_min_interval_sec', label: 'Min Interval', suffix: 's', step: 0.5 },
+    ];
+    const paramFields = [...commonFields, ...(strategy === 'delta' ? deltaFields : edgeFields)];
     return (
       <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
         <div className="p-2 border-b border-gray-700">
           <span className="text-[10px] font-semibold text-gray-300">Trading Parameters</span>
         </div>
         <div className="p-2 space-y-1.5">
+          {/* Strategy selector */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-gray-400">Strategy</span>
+            <select
+              value={strategy}
+              onChange={(e) => handleParamChange('strategy' as keyof TradingParams, e.target.value as 'edge' | 'delta')}
+              className="w-20 h-5 bg-gray-900 border border-gray-600 rounded text-center font-mono text-[10px] text-white"
+            >
+              <option value="edge">edge</option>
+              <option value="delta">delta</option>
+            </select>
+          </div>
           {paramFields.map(({ key, label, suffix, step }) => (
             <div key={key} className="flex items-center justify-between">
               <span className="text-[10px] text-gray-400">{label}</span>

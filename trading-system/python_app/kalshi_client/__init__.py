@@ -154,7 +154,11 @@ class KalshiClient:
         self._private_key = load_private_key(private_key_path)
 
         # REST config
-        self.base_url = api_url.replace("wss://", "https://").replace("/trade-api/ws/v2", "")
+        self.base_url = (api_url
+            .replace("wss://", "https://")
+            .replace("ws://", "http://")
+            .replace("/trade-api/ws/v2", "")
+        )
         self.api_base = f"{self.base_url}/trade-api/v2"
 
         # REST sub-APIs

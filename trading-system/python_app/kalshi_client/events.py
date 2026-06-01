@@ -36,13 +36,17 @@ class EventsAPI:
         start_ts: int,
         end_ts: int,
         period_interval: int = 1,
+        ticker: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Get candlesticks for an event"""
+        """Get candlesticks for an event. Kalshi requires a `ticker` query param
+        identifying which market within the event you want."""
         path = f"/series/{series_ticker}/events/{event_ticker}/candlesticks"
         params = {
             "start_ts": start_ts,
             "end_ts": end_ts,
             "period_interval": period_interval,
         }
+        if ticker:
+            params["ticker"] = ticker
         return self._client._request("GET", path, params=params)
 

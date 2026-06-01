@@ -23,6 +23,16 @@
 *.pickle
 *.joblib
 
+
+sim-exchange/data_cache/OKCSASG7.jsonl
+sim-exchange/data_cache/OKCSAS_may28.jsonl
+sim-exchange/data_cache/OKCSAS_may28_pbp.json
+sim-exchange/data_cache/OKCSAS_may28_plays.csv
+sim-exchange/data_cache/OKCSAS_pbp.json
+
+nba/artifacts/
+nba/outputs_v3/
+
 # =============================================================================
 # Kalshi-Client (Xcode / Swift)
 # =============================================================================

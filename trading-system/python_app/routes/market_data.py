@@ -104,7 +104,8 @@ def get_event_candlesticks(
     event_ticker: str,
     start_ts: int = Query(..., description="Start timestamp"),
     end_ts: int = Query(..., description="End timestamp"),
-    period_interval: int = Query(default=1, description="Period in minutes (1, 60, or 1440)")
+    period_interval: int = Query(default=1, description="Period in minutes (1, 60, or 1440)"),
+    ticker: Optional[str] = Query(default=None, description="Market ticker within the event")
 ):
     """Get candlesticks for an event"""
     try:
@@ -113,7 +114,8 @@ def get_event_candlesticks(
             event_ticker=event_ticker,
             start_ts=start_ts,
             end_ts=end_ts,
-            period_interval=period_interval
+            period_interval=period_interval,
+            ticker=ticker,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

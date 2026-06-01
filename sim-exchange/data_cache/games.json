@@ -1,0 +1,14 @@
+
+[
+  {
+    "game_id": "OKCSAS_may28",
+    "away_team": "OKC",
+    "home_team": "SAS",
+    "date": "2026-05-28",
+    "home_ticker": "KXNBAGAME-26MAY28OKCSAS-SAS",
+    "away_ticker": "KXNBAGAME-26MAY28OKCSAS-OKC",
+    "orderbook_file": "OKCSAS_may28.jsonl",
+    "nba_pbp_json": "OKCSAS_may28_pbp.json",
+    "pbp_file": "OKCSAS_may28_plays.csv"
+  }
+]

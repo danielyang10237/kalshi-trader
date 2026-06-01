@@ -24,7 +24,11 @@ class TradingParams:
     max_exposure: int = 50000   # cents ($500)
     order_size: int = 10        # contracts per order
     edge_decay: Optional[float] = None  # not used for now
-    wp_change_threshold: float = 0.005  # min home_wp change to trigger trade eval
+    wp_change_threshold: float = 0.005  # min home_wp change to trigger trade eval (edge mode)
+    # delta-momentum strategy params
+    strategy: str = "edge"                # "edge" or "delta"
+    delta_threshold: float = 0.02         # min |Δp| between snapshots to trigger
+    delta_min_interval_sec: float = 0.0   # rate-limit between delta trades (0 = none)
     enabled: bool = False
 
     def to_dict(self) -> dict:
@@ -35,6 +39,9 @@ class TradingParams:
             "order_size": self.order_size,
             "edge_decay": self.edge_decay,
             "wp_change_threshold": self.wp_change_threshold,
+            "strategy": self.strategy,
+            "delta_threshold": self.delta_threshold,
+            "delta_min_interval_sec": self.delta_min_interval_sec,
             "enabled": self.enabled,
         }
 
@@ -66,6 +73,9 @@ class TraderState:
 
     # Last wp that triggered a trade evaluation
     last_evaluated_wp: Optional[float] = None
+    # delta-strategy state
+    prev_wp: Optional[float] = None
+    last_delta_trade_ts: float = 0.0
 
     def should_evaluate(self, home_wp: float) -> bool:
         """Return True if home_wp has changed enough to warrant a trade evaluation."""
@@ -187,8 +197,8 @@ def evaluate_and_trade(state: TraderState, home_wp: float) -> Optional[dict]:
     if best_edge < state.params.min_edge:
         return None
 
-    # ── Position & exposure risk checks ──
-    # Refresh positions from fills cache
+    # Refresh positions for the chosen ticker, then delegate to the shared
+    # post-selection pipeline (sizing, risk checks, paper/live order placement).
     if ticker:
         pos, cost = compute_position_from_fills(ticker)
         if side == "home":
@@ -198,13 +208,19 @@ def evaluate_and_trade(state: TraderState, home_wp: float) -> Optional[dict]:
             state.away_position = pos
             state.away_cost = cost
 
+    return _execute_order(state, action, side, ticker, price, model_price,
+                          extras={"edge": round(best_edge, 1)})
+
+
+def _execute_order(state: TraderState, action: str, side: str, ticker: str,
+                   price: int, model_price: float,
+                   extras: Optional[dict] = None) -> Optional[dict]:
+    """Apply risk checks and place a paper/live order. Shared between strategies."""
     cur_pos = state.home_position if side == "home" else state.away_position
-    # BUY increases position, SELL decreases
     if action == "BUY" and cur_pos >= state.params.max_position:
         return None
     if action == "SELL" and cur_pos <= -state.params.max_position:
         return None
-
     if state.total_exposure() >= state.params.max_exposure:
         return None
 
@@ -219,10 +235,12 @@ def evaluate_and_trade(state: TraderState, home_wp: float) -> Optional[dict]:
         "ticker": ticker,
         "price": price,
         "size": size,
-        "edge": round(best_edge, 1),
         "model_price": round(model_price, 1),
         "paper": settings.paper_trade,
     }
+    if extras:
+        trade_record.update(extras)
+    extras_str = " ".join(f"{k}={v}" for k, v in (extras or {}).items())
 
     if settings.paper_trade:
         trade_record["result"] = "PAPER"
@@ -230,40 +248,102 @@ def evaluate_and_trade(state: TraderState, home_wp: float) -> Optional[dict]:
         state.last_trade_time = time.time()
         logger.info(
             f"[trader][PAPER] {action} {side} YES {size}@{price}c | "
-            f"edge={best_edge:.1f}c | model={model_price:.1f}c | ticker={ticker}"
+            f"model={model_price:.1f}c | ticker={ticker} | {extras_str}"
         )
         return trade_record
 
-    # Live order
     try:
         order_group_id = get_or_create_order_group(ticker)
         if action == "BUY":
             result = kalshi.trades.buy_limit_order(
-                ticker=ticker,
-                count=size,
-                price=price,
+                ticker=ticker, count=size, price=price,
                 order_group_id=order_group_id,
                 time_in_force="immediate_or_cancel",
             )
         else:
             result = kalshi.trades.sell_limit_order(
-                ticker=ticker,
-                count=size,
-                price=price,
+                ticker=ticker, count=size, price=price,
                 order_group_id=order_group_id,
                 time_in_force="immediate_or_cancel",
             )
-
         trade_record["result"] = result
         state.trades.append(trade_record)
         state.last_trade_time = time.time()
-
         logger.info(
             f"[trader] ORDER: {action} {side} YES {size}@{price}c | "
-            f"edge={best_edge:.1f}c | ticker={ticker}"
+            f"ticker={ticker} | {extras_str}"
         )
         return trade_record
-
     except Exception as e:
         logger.error(f"[trader] Order failed: {e}")
         return {"error": str(e), "action": action, "side": side, "ticker": ticker}
+
+
+def evaluate_and_trade_delta(state: TraderState, home_wp: float) -> Optional[dict]:
+    """Delta-momentum strategy.
+
+    Tracks home_wp across consecutive snapshots; when |home_wp - prev_wp| exceeds
+    delta_threshold, trade in the direction of the move (positive d → long home,
+    negative d → long away). Position naturally closes/flips on reverse deltas
+    because the new trade is in the opposite direction.
+    """
+    if not state.params.enabled or home_wp is None:
+        return None
+
+    if state.prev_wp is None:
+        state.prev_wp = home_wp
+        return None  # need two samples to compute a delta
+
+    d = home_wp - state.prev_wp
+    state.prev_wp = home_wp
+
+    if abs(d) < state.params.delta_threshold:
+        return None
+
+    now = time.time()
+    if (state.params.delta_min_interval_sec > 0
+            and (now - state.last_delta_trade_ts) < state.params.delta_min_interval_sec):
+        return None
+
+    direction = 1 if d > 0 else -1
+    model_home = home_wp * 100
+    model_away = (1 - home_wp) * 100
+
+    # Score candidates by effective entry cost in cents (lower = better).
+    # SELL away_yes at bid Q is economically BUY home_yes at (100 - Q).
+    candidates = []
+    if direction == 1:
+        if state.home_best_ask is not None and state.home_ticker:
+            candidates.append(("BUY", "home", state.home_ticker,
+                               state.home_best_ask, state.home_best_ask, model_home))
+        if state.away_best_bid is not None and state.away_ticker:
+            candidates.append(("SELL", "away", state.away_ticker,
+                               state.away_best_bid, 100 - state.away_best_bid, model_home))
+    else:
+        if state.away_best_ask is not None and state.away_ticker:
+            candidates.append(("BUY", "away", state.away_ticker,
+                               state.away_best_ask, state.away_best_ask, model_away))
+        if state.home_best_bid is not None and state.home_ticker:
+            candidates.append(("SELL", "home", state.home_ticker,
+                               state.home_best_bid, 100 - state.home_best_bid, model_away))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c[4])  # cheapest entry first
+    action, side, ticker, price, _eff, model_price = candidates[0]
+
+    # Refresh positions before risk checks
+    pos, cost = compute_position_from_fills(ticker)
+    if side == "home":
+        state.home_position = pos
+        state.home_cost = cost
+    else:
+        state.away_position = pos
+        state.away_cost = cost
+
+    result = _execute_order(state, action, side, ticker, price, model_price,
+                            extras={"delta": round(d, 4), "direction": direction})
+    if result and "error" not in result:
+        state.last_delta_trade_ts = now
+    return result

@@ -150,7 +150,8 @@ export default function CandlestickChart({
 
       const response = await fetch(
         `${apiUrl}/api/series/${seriesTicker}/events/${eventTicker}/candlesticks?` +
-        `start_ts=${startTs}&end_ts=${endTs}&period_interval=${periodInterval}`
+        `start_ts=${startTs}&end_ts=${endTs}&period_interval=${periodInterval}` +
+        `&ticker=${encodeURIComponent(marketTicker)}`
       );
 
       if (!response.ok) {
